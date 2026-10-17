@@ -1,0 +1,61 @@
+---
+title: "Publication Bias in Psychological Research"
+subtitle: "A simulation project motivated by the Mozart effect debate"
+output: html_document
+---
+
+# Project overview
+
+This PIPS group project will investigate how selective publication changes
+meta-analytic effect estimates in simulated psychological experiments.
+
+The Mozart effect debate motivates the project. However, our simulation will
+not establish whether publication bias caused the historical Mozart effect.
+
+# Research question
+
+How do publication-selection mechanisms influence estimated psychological
+effects, and how reliably can selected statistical methods identify the
+resulting distortions?
+
+# Planned workflow
+
+1. Generate participant-level data for simulated psychological experiments.
+2. Calculate study-level effect estimates and sampling variances.
+3. Apply a clearly specified publication filter.
+4. Compare meta-analyses of all studies and published studies.
+5. Evaluate estimates and selected bias-detection methods across repeated
+   simulations.
+6. Present informative figures and discuss limitations.
+
+The team will agree on the exact simulation settings, effect-size measure,
+and statistical methods before integrating these modules.
+
+# Development status
+
+This initial document contains the project overview and an R environment
+record. The simulation, publication filter, statistical analyses, and figures
+are not implemented in this version. It is not yet a complete course
+submission and does not report scientific results.
+
+Supporting functions will be stored in `src/` and called from this document
+as the team completes and reviews them.
+
+# R environment
+
+The following code records the R version and packages used to render this
+initial document. It does not run the scientific simulation.
+
+```{r session-record}
+sessionInfo()
+```
+
+# Background references
+
+Rauscher, F. H., Shaw, G. L., & Ky, K. N. (1993). Music and spatial task
+performance. *Nature, 365*, 611.
+https://doi.org/10.1038/365611a0
+
+Pietschnig, J., Voracek, M., & Formann, A. K. (2010). Mozart effect–Shmozart
+effect: A meta-analysis. *Intelligence, 38*(3), 314–323.
+https://doi.org/10.1016/j.intell.2010.03.001
