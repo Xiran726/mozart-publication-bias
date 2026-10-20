@@ -277,4 +277,400 @@ MOZART_TOTAL_N <- c(36, 24, 68, 92, 40, 8, 14, 32, 16, 38, 36, 12, 206, 86,
 #' @param tau Between-study SD of true effects (heterogeneity).
 #' @param total_n_pool Numeric vector of total sample sizes to sample from.
 #'   Pass a single number to give every study the same total N.
-#' @param con
+#' @param control_mean,sd Passed on to generate_study_data().
+#' @return A data frame with one row per study: `study_id`, the study's own
+#'   true effect `study_true_d`, and the results of compute_effect_size().
+simulate_literature <- function(n_studies = 100, true_d = 0, tau = 0,
+                                total_n_pool = MOZART_TOTAL_N,
+                                control_mean = 100, sd = 15) {
+  check_count(n_studies, "n_studies", min = 1)
+  check_number(true_d, "true_d")
+  check_number(tau, "tau", min = 0)
+  if (!is.numeric(total_n_pool) || length(total_n_pool) < 1 ||
+      any(!is.finite(total_n_pool)) || any(total_n_pool < 4)) {
+    stop("`total_n_pool` must contain sample sizes of at least 4.",
+         call. = FALSE)
+  }
+  
+  # Draw each study's sample size. (sample() behaves differently when given
+  # a single number, so a single sample size is repeated instead.)
+  total_n <- if (length(total_n_pool) == 1) {
+    rep(total_n_pool, n_studies)
+  } else {
+    sample(total_n_pool, n_studies, replace = TRUE)
+  }
+  n_per_group  <- round(total_n / 2)
+  study_true_d <- rnorm(n_studies, mean = true_d, sd = tau)
+  
+  # Run every study: generate participants, then compute its effect size.
+  # vapply() returns a matrix with one column per study, so t() turns it
+  # into one row per study.
+  results <- vapply(seq_len(n_studies), function(i) {
+    data <- generate_study_data(n_per_group[i], study_true_d[i],
+                                control_mean, sd)
+    compute_effect_size(mozart  = data$score[data$condition == "mozart"],
+                        control = data$score[data$condition == "control"])
+  }, FUN.VALUE = numeric(11))
+  
+  results <- as.data.frame(t(results))
+  names(results) <- c("n_mozart", "n_control", "mean_mozart", "mean_control",
+                      "d", "g", "var_g", "se_g", "t", "df", "p_value")
+  
+  cbind(study_id = seq_len(n_studies), study_true_d = study_true_d, results)
+}
+
+
+# =============================================================================
+# Step 3: the journal filter (publication bias)
+# =============================================================================
+
+#' Decide which studies get published
+#'
+#' Models selective publication. A study is "significant" when p < alpha AND
+#' the Mozart group scored higher (the predicted direction). Significant
+#' studies are always published. All other studies (non-significant, or
+#' significant in the "wrong" direction) are published only with
+#' probability `prob_publish_nonsig`.
+#'
+#' Choosing `prob_publish_nonsig`:
+#'   1    = no publication bias (everything is published)
+#'   0.33 = realistic: Franco et al. (2014) found that null results were
+#'          published about a third as often as strong results (~20% vs ~60%)
+#'   0.10 = strong publication bias
+#'   0    = only significant positive results are ever published
+#'
+#' @param literature Data frame as returned by simulate_literature().
+#' @param prob_publish_nonsig Probability (0-1) that a study without a
+#'   significant positive result is published.
+#' @param alpha Significance threshold.
+#' @return `literature` with two added columns: `significant` (TRUE/FALSE)
+#'   and `published` (TRUE/FALSE). All studies are kept, so published and
+#'   unpublished studies can be compared.
+apply_publication_bias <- function(literature, prob_publish_nonsig = 0.33,
+                                   alpha = 0.05) {
+  if (!is.data.frame(literature) ||
+      !all(c("g", "p_value") %in% names(literature))) {
+    stop("`literature` must be a data frame from simulate_literature().",
+         call. = FALSE)
+  }
+  check_probability(prob_publish_nonsig, "prob_publish_nonsig")
+  check_probability(alpha, "alpha")
+  
+  significant <- literature$p_value < alpha & literature$g > 0
+  lucky       <- runif(nrow(literature)) < prob_publish_nonsig
+  
+  literature$significant <- significant
+  literature$published   <- significant | lucky
+  literature
+}
+
+
+#' Keep only the published studies
+#'
+#' @param literature Data frame with a `published` column, e.g. from
+#'   apply_publication_bias() or run_simulation().
+#' @return The subset of rows with `published == TRUE`: what a meta-analyst
+#'   searching the journals would find.
+get_published_studies <- function(literature) {
+  if (!is.data.frame(literature) || !"published" %in% names(literature)) {
+    stop("`literature` needs a `published` column; ",
+         "run apply_publication_bias() first.", call. = FALSE)
+  }
+  literature[literature$published, , drop = FALSE]
+}
+
+
+# =============================================================================
+# Step 4: keep running studies until k are published
+# =============================================================================
+
+#' Simulate a literature until a fixed number of studies is published
+#'
+#' Labs keep running Mozart experiments one after another, and every
+#' finished study goes through the journal filter. This stops as soon as
+#' `k_published` studies have been published.
+#'
+#' Why a fixed number of PUBLISHED studies? It keeps the meta-analyses
+#' comparable across conditions: every meta-analysis pools the same number of
+#' studies, so differences between conditions reflect publication bias rather
+#' than how many studies happened to be published. The default of 38 matches
+#' the meta-analysis of Pietschnig et al. (2010). The stronger the bias, the
+#' more studies end up in the file drawer before 38 are published.
+#'
+#' For speed, studies are simulated in batches. Studies run after the
+#' `k_published`-th publication are discarded, so the result is the same as
+#' running studies one at a time and stopping at the k-th publication.
+#'
+#' @param k_published Number of published studies to collect.
+#' @param true_d,tau,total_n_pool,control_mean,sd Passed on to
+#'   simulate_literature().
+#' @param prob_publish_nonsig,alpha Passed on to apply_publication_bias().
+#' @param batch_size Number of studies simulated per batch.
+#' @param max_studies Safety limit on the total number of studies run. Stops
+#'   with an error if `k_published` is not reached by then (e.g. when almost
+#'   no study is ever published).
+#' @return A data frame with ALL studies that were run (published AND file
+#'   drawer), in the order they were run. Exactly `k_published` rows have
+#'   `published == TRUE`.
+simulate_published_literature <- function(k_published = 38, true_d = 0,
+                                          tau = 0, prob_publish_nonsig = 0.33,
+                                          alpha = 0.05,
+                                          total_n_pool = MOZART_TOTAL_N,
+                                          control_mean = 100, sd = 15,
+                                          batch_size = 50,
+                                          max_studies = 1e5) {
+  check_count(k_published, "k_published", min = 1)
+  check_count(batch_size, "batch_size", min = 1)
+  check_count(max_studies, "max_studies", min = 1)
+  
+  batches     <- list()
+  n_published <- 0
+  n_run       <- 0
+  
+  # Keep simulating batches of studies until enough have been published
+  while (n_published < k_published) {
+    if (n_run >= max_studies) {
+      stop(sprintf(paste("Only %d of %d studies were published after %d",
+                         "studies were run. Increase `max_studies` or",
+                         "`prob_publish_nonsig`."),
+                   as.integer(n_published), as.integer(k_published),
+                   as.integer(n_run)), call. = FALSE)
+    }
+    batch <- simulate_literature(batch_size, true_d, tau, total_n_pool,
+                                 control_mean, sd)
+    batch <- apply_publication_bias(batch, prob_publish_nonsig, alpha)
+    
+    batches[[length(batches) + 1]] <- batch
+    n_published <- n_published + sum(batch$published)
+    n_run       <- n_run + batch_size
+  }
+  
+  literature <- do.call(rbind, batches)
+  
+  # Drop the studies that were run after the k-th publication
+  last_study <- which(cumsum(literature$published) == k_published)[1]
+  literature <- literature[seq_len(last_study), ]
+  
+  literature$study_id <- seq_len(last_study)   # renumber 1, 2, 3, ...
+  rownames(literature) <- NULL
+  literature
+}
+
+
+# =============================================================================
+# Step 5: many replications of one condition
+# =============================================================================
+
+#' Simulate many literatures under the same settings
+#'
+#' One simulated literature is a single random draw: its meta-analytic
+#' estimate could be too high or too low by chance. Repeating the simulation
+#' `n_reps` times shows what happens ON AVERAGE under these settings, and how
+#' much results vary.
+#'
+#' @param n_reps Number of replications (simulated literatures).
+#' @param ... Settings passed on to simulate_published_literature(), e.g.
+#'   `true_d`, `tau`, `prob_publish_nonsig`, `k_published`.
+#' @return One data frame with all studies of all replications; the column
+#'   `rep` (1, 2, ..., n_reps) says which literature a study belongs to.
+run_condition <- function(n_reps = 500, ...) {
+  check_count(n_reps, "n_reps", min = 1)
+  
+  literatures <- lapply(seq_len(n_reps), function(r) {
+    literature <- simulate_published_literature(...)
+    cbind(rep = r, literature)
+  })
+  do.call(rbind, literatures)
+}
+
+
+# =============================================================================
+# Step 6: all conditions
+# =============================================================================
+
+#' Create the grid of simulation conditions
+#'
+#' Every combination of the three factors becomes one condition. The
+#' defaults give 2 x 3 x 2 = 12 conditions:
+#'   - true_d: 0 (the Mozart effect does not exist) and 0.24 (a small real
+#'     effect: our random-effects estimate for studies outside the Rauscher
+#'     and Rideout labs in the Pietschnig et al., 2010, data)
+#'   - prob_publish_nonsig: 1 (no bias), 0.33 (realistic), 0.10 (strong)
+#'   - tau: 0 (same effect in every lab) and 0.3 (effects differ between
+#'     labs; close to the heterogeneity in the real Mozart literature)
+#'
+#' @param true_d Vector of average true effects.
+#' @param prob_publish_nonsig Vector of publication probabilities for
+#'   non-significant results.
+#' @param tau Vector of heterogeneity values.
+#' @return A data frame with one row per condition and columns
+#'   `condition_id`, `true_d`, `tau`, `prob_publish_nonsig`.
+make_conditions <- function(true_d = c(0, 0.24),
+                            prob_publish_nonsig = c(1, 0.33, 0.10),
+                            tau = c(0, 0.3)) {
+  if (!is.numeric(true_d) || length(true_d) < 1 || any(!is.finite(true_d))) {
+    stop("`true_d` must contain finite numbers.", call. = FALSE)
+  }
+  if (!is.numeric(tau) || length(tau) < 1 || any(!is.finite(tau)) ||
+      any(tau < 0)) {
+    stop("`tau` must contain numbers >= 0.", call. = FALSE)
+  }
+  check_probabilities(prob_publish_nonsig, "prob_publish_nonsig")
+  
+  conditions <- expand.grid(true_d = true_d, tau = tau,
+                            prob_publish_nonsig = prob_publish_nonsig)
+  cbind(condition_id = seq_len(nrow(conditions)), conditions)
+}
+
+
+#' Columns of each simulated study that are kept in the final results
+RESULT_COLUMNS <- c("rep", "study_id", "study_true_d", "n_mozart",
+                    "n_control", "g", "var_g", "se_g", "t", "p_value",
+                    "significant", "published")
+
+
+#' Run the full simulation
+#'
+#' For every condition in `conditions`, simulates `n_reps` literatures with
+#' `k_published` published studies each, and stacks everything into one
+#' tidy data frame (one row per simulated study).
+#'
+#' @param conditions Data frame from make_conditions().
+#' @param n_reps Number of replications (literatures) per condition.
+#' @param k_published Number of published studies per literature.
+#' @param seed Random seed, so results are reproducible. Use NULL to not set
+#'   a seed.
+#' @param verbose If TRUE, prints progress messages.
+#' @return A data frame with one row per simulated study and columns:
+#'   condition_id, true_d, tau,
+#'     prob_publish_nonsig  the condition this study belongs to
+#'   rep                    which simulated literature (1 ... n_reps)
+#'   study_id               order in which studies in that literature were run
+#'   study_true_d           this study's own true effect (= true_d if tau = 0)
+#'   n_mozart, n_control    group sizes
+#'   g, var_g, se_g         Hedges' g, its sampling variance and standard error
+#'   t, p_value             t-test result
+#'   significant            p < .05 and Mozart group higher
+#'   published              passed the journal filter (FALSE = file drawer)
+#'   The settings used are stored in attr(result, "settings").
+run_simulation <- function(conditions = make_conditions(), n_reps = 500,
+                           k_published = 38, seed = 2026, verbose = TRUE) {
+  needed <- c("condition_id", "true_d", "tau", "prob_publish_nonsig")
+  if (!is.data.frame(conditions) || !all(needed %in% names(conditions))) {
+    stop("`conditions` must be a data frame from make_conditions().",
+         call. = FALSE)
+  }
+  check_count(n_reps, "n_reps", min = 1)
+  check_count(k_published, "k_published", min = 1)
+  if (!is.null(seed)) {
+    check_count(seed, "seed", min = 0)
+    set.seed(seed)
+  }
+  
+  start_time <- Sys.time()
+  results <- vector("list", nrow(conditions))
+  
+  for (i in seq_len(nrow(conditions))) {
+    cond <- conditions[i, ]
+    if (verbose) {
+      message(sprintf(
+        "Condition %d of %d: true_d = %.2f, tau = %.2f, prob_publish_nonsig = %.2f",
+        i, nrow(conditions), cond$true_d, cond$tau, cond$prob_publish_nonsig))
+    }
+    studies <- run_condition(
+      n_reps              = n_reps,
+      k_published         = k_published,
+      true_d              = cond$true_d,
+      tau                 = cond$tau,
+      prob_publish_nonsig = cond$prob_publish_nonsig
+    )
+    # Put the condition settings in front of every study, and keep only the
+    # columns the analysis needs (group means, Cohen's d and df are left out
+    # to keep the saved file small; g, var_g and se_g contain what is needed)
+    results[[i]] <- cbind(cond[rep(1, nrow(studies)), needed],
+                          studies[, RESULT_COLUMNS])
+  }
+  
+  results <- do.call(rbind, results)
+  rownames(results) <- NULL
+  
+  attr(results, "settings") <- list(n_reps = n_reps,
+                                    k_published = k_published,
+                                    seed = seed,
+                                    created = Sys.time(),
+                                    r_version = R.version.string)
+  if (verbose) {
+    message(sprintf("Done: %d studies simulated in %.1f minutes.",
+                    nrow(results),
+                    as.numeric(difftime(Sys.time(), start_time,
+                                        units = "mins"))))
+  }
+  results
+}
+
+
+#' Describe what happened in each condition (a quick sanity check)
+#'
+#' Simple descriptive summaries per condition. NOT a meta-analysis: means
+#' are unweighted. The proper meta-analytic estimates and bias tests are
+#' part of the analysis step.
+#'
+#' @param results Data frame from run_simulation().
+#' @return A data frame with one row per condition: the condition settings,
+#'   the average number of studies run per literature, the share of studies
+#'   published, the mean g of all studies, and the mean g of published
+#'   studies only.
+describe_simulation <- function(results) {
+  needed <- c("condition_id", "true_d", "tau", "prob_publish_nonsig",
+              "rep", "g", "published")
+  if (!is.data.frame(results) || !all(needed %in% names(results))) {
+    stop("`results` must be a data frame from run_simulation().",
+         call. = FALSE)
+  }
+  
+  by_condition <- split(results, results$condition_id)
+  rows <- lapply(by_condition, function(x) {
+    data.frame(
+      condition_id          = x$condition_id[1],
+      true_d                = x$true_d[1],
+      tau                   = x$tau[1],
+      prob_publish_nonsig   = x$prob_publish_nonsig[1],
+      mean_studies_run      = nrow(x) / length(unique(x$rep)),
+      prop_published        = mean(x$published),
+      mean_g_all            = mean(x$g),
+      mean_g_published      = mean(x$g[x$published])
+    )
+  })
+  out <- do.call(rbind, rows)
+  rownames(out) <- NULL
+  out
+}
+
+
+# =============================================================================
+# Step 7: save the results for the analysis
+# =============================================================================
+
+#' Save simulation results to an .rds file
+#'
+#' The full simulation takes a few minutes, so it is run once and saved.
+#' The analysis can then load the results with readRDS() instead of
+#' re-running the simulation.
+#'
+#' @param results Data frame from run_simulation().
+#' @param file Path of the .rds file to write. Missing folders are created.
+#' @return The file path (invisibly).
+save_simulation <- function(results,
+                            file = file.path("data",
+                                             "simulated_literatures.rds")) {
+  if (!is.data.frame(results)) {
+    stop("`results` must be a data frame from run_simulation().",
+         call. = FALSE)
+  }
+  if (!is.character(file) || length(file) != 1 || !nzchar(file)) {
+    stop("`file` must be a single file path.", call. = FALSE)
+  }
+  dir.create(dirname(file), recursive = TRUE, showWarnings = FALSE)
+  saveRDS(results, file)
+  invisible(file)
+}
