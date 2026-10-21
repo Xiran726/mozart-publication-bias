@@ -17,12 +17,24 @@ knitr::opts_chunk$set(
   echo = TRUE,
   error = FALSE,
   cache = FALSE,
-  fig.width = 8,
-  fig.height = 5
+  fig.width = 9,
+  fig.height = 6
 )
 
 # main.Rmd belongs in the repository root. Keep supporting code in src/r.
-required_scripts <- file.path("src", "r", c("simulation.R", "validation.R"))
+required_packages <- c("metafor", "ggplot2")
+missing_packages <- required_packages[
+  !vapply(required_packages, requireNamespace, logical(1), quietly = TRUE)
+]
+if (length(missing_packages) > 0L) {
+  stop(
+    "Install required packages before rendering: ",
+    paste(missing_packages, collapse = ", "),
+    call. = FALSE
+  )
+}
+
+required_scripts <- file.path("src", "r", c("simulation.R", "validation.R", "analysis.R"))
 missing_scripts <- required_scripts[!file.exists(required_scripts)]
 if (length(missing_scripts) > 0L) {
   stop(
@@ -34,6 +46,7 @@ if (length(missing_scripts) > 0L) {
 
 source(file.path("src", "r", "simulation.R"), local = TRUE)
 source(file.path("src", "r", "validation.R"), local = TRUE)
+source(file.path("src", "r", "analysis.R"), local = TRUE)
 ```
 
 # Project overview
@@ -50,14 +63,15 @@ values and examine distortion associated with selective publication.
 
 **Current development status:** this document runs the simulation, validates
 its study-level output, and displays descriptive checks. The inferential
-analysis and its supporting plot have not yet been integrated. This is a
+analysis has been added, but its supporting plot have not yet been integrated. This is a
 working development version, not the final course deliverable.
 
 # Research question
 
-How do publication-selection mechanisms influence estimated psychological
-effects, and how reliably can selected statistical methods identify the
-resulting distortions?
+How does selective publication influence meta-analytic estimates of the
+simulated Mozart effect? How often does Egger's test identify funnel-plot
+asymmetry, and does trim-and-fill reduce estimation error under the simulated
+conditions?
 
 # Planned workflow
 
@@ -69,28 +83,34 @@ resulting distortions?
    simulations.
 6. Present informative figures and discuss limitations.
 
-The simulation settings and study-level effect-size measure are specified
-below. The statistical analysis methods and module interface will be
-finalised with the analysis team member before integration.
+Supporting functions are defined in `src/r/`. This document calls their
+high-level interfaces and presents the methods, diagnostics, and results.
 
 # How to run this document
 
-Install `knitr` and `rmarkdown` before rendering. Open `main.Rmd` in RStudio
-and click **Knit**, or run the following command from the repository root:
+Install the dependencies once before rendering:
+
+```{r installation-instructions, eval=FALSE}
+install.packages(c("knitr", "rmarkdown", "metafor", "ggplot2"))
+```
+
+Open the repository-root `main.Rmd` in RStudio and click **Knit**, or execute
+the following command from the repository root:
 
 ```{r render-instructions, eval=FALSE}
 rmarkdown::render("main.Rmd")
 ```
 
-Rendering requires Pandoc; RStudio normally supplies it. The simulation and
-validation scripts use base R and do not require additional packages.
-Dependencies for the final analysis will be documented when that module is
-integrated.
+HTML rendering requires Pandoc, normally supplied with RStudio. No personal
+absolute paths or existing workspace objects are required. Each render runs
+a fresh simulation rather than loading a previously saved dataset.
 
-The code below calls high-level functions defined in `src/r/`; it does not
-reimplement the simulation or validation logic. Running the document generates
-new results in memory, rather than relying on objects left in an earlier R
-session or on a pre-existing data file.
+The default of 20 repetitions per condition is a development-scale run. It
+should not be treated as establishing adequate Monte Carlo precision. For a
+larger run, change `n_reps` in the YAML parameters or pass parameters to
+`rmarkdown::render()`. Runtime increases with simulation size and publication
+selection strength. The final README should state the chosen run size and
+installation instructions consistently with this document.
 
 # Simulation design
 
@@ -236,22 +256,142 @@ averages of replication-specific meta-analytic results.
 
 # Statistical analysis and visualisation
 
-**Not yet integrated.** The analysis module is being developed separately.
-The validated `simulation_results` object above is the intended input for
-integration, subject to agreement on the final analysis interface.
+# Statistical analysis
 
-The completed version of this section must run at least one motivated,
-appropriate inferential statistical analysis and display an informative plot
-supporting it, as required by the assignment. Supporting implementation will
-remain in `src/r/`, with only high-level calls and interpretation in this
-main document.
+The statistical analysis and result tables are integrated below. Figures are
+being developed separately and are not yet included in this version. This is
+an intermediate development version, not the complete final deliverable.
 
-When integrating the analysis, publication-based meta-analyses should use
-only the published studies within each `condition_id` × `rep` literature.
-The full data, including unpublished studies, remain available for comparisons
-and other analyses where appropriate. Replications are separate simulated
-literatures; pooling all their study rows as one literature would change the
-intended unit of analysis.
+## Random-effects meta-analysis
+
+For every simulated literature, `analysis.R` fits two separate random-effects
+meta-analyses using `metafor::rma()`: one to the published studies and one to
+all retained studies. Each model uses Hedges' g and its estimated sampling
+variance. Between-study variance is estimated using restricted maximum
+likelihood (REML); the same model is used across conditions, including those
+with zero generating heterogeneity.
+
+Repetitions are analysed as separate literatures, not pooled into one large
+meta-analysis. This preserves the intended unit of analysis.
+
+## Egger's test and trim-and-fill
+
+Egger's test is applied to each published-study model using
+`metafor::regtest(model, model = "rma", predictor = "sei")`. The test examines
+an association between study effect estimates and standard errors.
+A p-value below 0.05 is recorded as a significant asymmetry test.
+
+Funnel-plot asymmetry can reflect small-study effects and does not uniquely
+establish publication bias. In this simulation we know the imposed selection
+mechanism, but a significant Egger result is still an asymmetry finding rather
+than proof of the mechanism. Standardised mean differences and their estimated
+standard errors can also be related by construction.
+
+Trim-and-fill is applied to the published-study model to estimate potentially
+missing studies under its assumptions and produce an adjusted effect. It is
+not guaranteed to recover the true effect or the actual unpublished studies.
+We assess its performance by comparing errors with the unadjusted estimate.
+
+## Run the analysis and inspect diagnostics
+
+```{r run-analysis}
+analysis_results <- analyse_simulations(simulation_results)
+analysis_estimates <- analysis_results$estimates
+analysis_diagnostics <- analysis_results$diagnostics
+
+knitr::kable(
+  as.data.frame(table(status = analysis_diagnostics$status)),
+  caption = "Analysis diagnostic status across simulated literatures"
+)
+```
+
+An `error` means the literature-level analysis returned no estimate row.
+A `warning` can indicate a failed Egger or trim-and-fill step, or another model
+warning; inspect the details rather than treating every warning as equivalent.
+Partial method failures retain available meta-analysis estimates. Complete
+literature failures are excluded from estimate summaries but retained in the
+log below.
+
+```{r analysis-diagnostic-details}
+flagged_diagnostics <- analysis_diagnostics[
+  analysis_diagnostics$status != "ok", , drop = FALSE
+]
+if (nrow(flagged_diagnostics) > 0L) {
+  knitr::kable(flagged_diagnostics, caption = "Warnings and errors requiring review")
+} else {
+  cat("No analysis warnings or errors were recorded.\n")
+}
+
+if (is.null(analysis_estimates) || nrow(analysis_estimates) == 0L) {
+  stop("No literature-level estimates were returned. Review the analysis diagnostics.",
+       call. = FALSE)
+}
+```
+
+# Results across repetitions
+
+## Definitions
+
+Estimation error is an estimate minus the condition's generating average
+population effect. Mean signed error is labelled **mean bias** in the tables.
+A positive value indicates overestimation; a negative value indicates
+underestimation. Mean absolute error measures distance from the generating
+value without cancelling positive and negative errors.
+
+The Egger significant rate uses only available test results. At publication
+probability 1 it is a reference-condition asymmetry rejection rate; it should
+not automatically be assumed to equal 5%. Under imposed selection it is the
+observed asymmetry rejection rate, not a general measure of diagnostic accuracy.
+
+Trim-and-fill summaries use only available adjusted estimates. Different
+methods may therefore have different denominators. Complete meta-analysis
+failures are absent from the estimate summaries, so failure patterns must be
+considered when interpreting performance.
+
+```{r summarise-analysis}
+condition_summary <- summarise_conditions(analysis_estimates)
+
+completion_table <- merge(
+  conditions,
+  condition_summary[, c("condition_id", "n_literatures",
+                        "n_egger_valid", "n_trimfill_valid"), drop = FALSE],
+  by = "condition_id",
+  all.x = TRUE,
+  sort = TRUE
+)
+completion_table$n_requested <- n_reps
+knitr::kable(
+  completion_table,
+  caption = "Returned literature estimates and valid method results by condition"
+)
+```
+
+A missing count in this table indicates a condition with no returned estimate
+rows; it is not evidence that its methods succeeded.
+
+```{r effect-estimate-table}
+knitr::kable(
+  condition_summary[, c(
+    "condition_id", "true_d", "tau", "prob_publish_nonsig",
+    "mean_est_all", "mean_est_published", "mean_est_trimfill"
+  ), drop = FALSE],
+  digits = 3,
+  caption = "Mean random-effects estimates across available repetitions"
+)
+```
+
+```{r performance-table}
+knitr::kable(
+  condition_summary[, c(
+    "condition_id", "mean_bias_all", "mean_bias_published",
+    "mean_bias_trimfill", "mean_abs_error_all",
+    "mean_abs_error_published", "mean_abs_error_trimfill",
+    "egger_significant_rate"
+  ), drop = FALSE],
+  digits = 3,
+  caption = "Estimation performance and Egger asymmetry rejection rates"
+)
+```
 
 # Interpretation and limitations
 
