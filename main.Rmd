@@ -1,16 +1,57 @@
 ---
 title: "Publication Bias in Psychological Research"
 subtitle: "A simulation project motivated by the Mozart effect debate"
-output: html_document
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    number_sections: true
+params:
+  n_reps: 20
+  k_published: 38
+  seed: 2026
 ---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  error = FALSE,
+  cache = FALSE,
+  fig.width = 8,
+  fig.height = 5
+)
+
+# main.Rmd belongs in the repository root. Keep supporting code in src/r.
+required_scripts <- file.path("src", "r", c("simulation.R", "validation.R"))
+missing_scripts <- required_scripts[!file.exists(required_scripts)]
+if (length(missing_scripts) > 0L) {
+  stop(
+    "Missing supporting scripts: ", paste(missing_scripts, collapse = ", "),
+    ". Open main.Rmd from the repository root and make sure the required modules are present.",
+    call. = FALSE
+  )
+}
+
+source(file.path("src", "r", "simulation.R"), local = TRUE)
+source(file.path("src", "r", "validation.R"), local = TRUE)
+```
 
 # Project overview
 
-This PIPS group project will investigate how selective publication changes
-meta-analytic effect estimates in simulated psychological experiments.
+This project explores that question using simulated Mozart-effect experiments.
+Each experiment compares spatial reasoning scores between a Mozart-listening
+group and a control group. The simulation is inspired by the Mozart-effect
+literature discussed by Rauscher et al. (1993) and Pietschnig et al. (2010),
+but is not a direct replication of the original experimental designs.
 
-The Mozart effect debate motivates the project. However, our simulation will
-not establish whether publication bias caused the historical Mozart effect.
+Unlike a real literature, the simulation has a known population effect.
+This allows the analysis to compare estimated effects with the generating
+values and examine distortion associated with selective publication.
+
+**Current development status:** this document runs the simulation, validates
+its study-level output, and displays descriptive checks. The inferential
+analysis and its supporting plot have not yet been integrated. This is a
+working development version, not the final course deliverable.
 
 # Research question
 
@@ -23,39 +64,240 @@ resulting distortions?
 1. Generate participant-level data for simulated psychological experiments.
 2. Calculate study-level effect estimates and sampling variances.
 3. Apply a clearly specified publication filter.
-4. Compare meta-analyses of all studies and published studies.
+4. Compare meta-analyses of studies and published studies.
 5. Evaluate estimates and selected bias-detection methods across repeated
    simulations.
 6. Present informative figures and discuss limitations.
 
-The team will agree on the exact simulation settings, effect-size measure,
-and statistical methods before integrating these modules.
+The simulation settings and study-level effect-size measure are specified
+below. The statistical analysis methods and module interface will be
+finalised with the analysis team member before integration.
 
-# Development status
+# How to run this document
 
-This initial document contains the project overview and an R environment
-record. The simulation, publication filter, statistical analyses, and figures
-are not implemented in this version. It is not yet a complete course
-submission and does not report scientific results.
+Install `knitr` and `rmarkdown` before rendering. Open `main.Rmd` in RStudio
+and click **Knit**, or run the following command from the repository root:
 
-Supporting functions will be stored in `src/` and called from this document
-as the team completes and reviews them.
+```{r render-instructions, eval=FALSE}
+rmarkdown::render("main.Rmd")
+```
 
-# R environment
+Rendering requires Pandoc; RStudio normally supplies it. The simulation and
+validation scripts use base R and do not require additional packages.
+Dependencies for the final analysis will be documented when that module is
+integrated.
 
-The following code records the R version and packages used to render this
-initial document. It does not run the scientific simulation.
+The code below calls high-level functions defined in `src/r/`; it does not
+reimplement the simulation or validation logic. Running the document generates
+new results in memory, rather than relying on objects left in an earlier R
+session or on a pre-existing data file.
 
-```{r session-record}
+# Simulation design
+
+## Experimental model
+
+The simulation generates normally distributed spatial reasoning scores for
+two independent groups with equal population standard deviations. The default
+control mean is 100 and the standard deviation is 15. These are modelling
+choices, not observed participant data.
+
+Each study is summarised using Hedges' g, its sampling variance and standard
+error, and a two-sided equal-variance t-test. Study sample sizes are sampled
+from the pool embedded in `simulation.R`. Odd total sample sizes are rounded
+when assigning equal group sizes, so the generated total can differ by one
+participant from the sampled total.
+
+## Publication mechanism
+
+A study is always published if its result is significant at the simulation's
+default threshold of 0.05 **and** favours the Mozart group. All other results,
+including significant results in the opposite direction, are published with
+probability `prob_publish_nonsig`.
+
+The values below represent no selection (1), moderate selection (0.33), and
+strong selection (0.10). The middle value is a simplified scenario motivated
+by the relative publication rates reported by Franco et al. (2014), not a
+fitted model of publication decisions in the Mozart literature.
+
+For each condition and replication, simulation continues until the requested
+number of studies has been published. Unpublished studies are retained and
+marked as file-drawer studies.
+
+## Conditions and run size
+
+We cross two mean population effects, two levels of between-study
+heterogeneity, and three publication probabilities. These give 12 conditions.
+The effect values are illustrative scenarios defined by this project; they
+are not estimates obtained from this simulation.
+
+The population parameter `true_d` is Cohen's d, whereas the study-level
+estimator is the small-sample-corrected Hedges' g. `tau` denotes the
+between-study standard deviation of generating effects, not a variance.
+
+```{r simulation-settings}
+conditions <- make_conditions(
+  true_d = c(0, 0.24),
+  prob_publish_nonsig = c(1, 0.33, 0.10),
+  tau = c(0, 0.3)
+)
+
+n_reps <- params$n_reps
+k_published <- params$k_published
+simulation_seed <- params$seed
+
+knitr::kable(conditions, caption = "Simulation conditions")
+
+run_settings <- data.frame(
+  setting = c("Conditions", "Replications per condition",
+              "Published studies per literature", "Random seed"),
+  value = c(nrow(conditions), n_reps, k_published, simulation_seed)
+)
+knitr::kable(run_settings, caption = "Run settings")
+```
+
+The default `r n_reps` replications per condition are intended for a manageable
+development demonstration, not a claim of adequate Monte Carlo precision.
+A larger run and its simulation uncertainty should be considered before
+making final substantive conclusions. The run size can be changed through
+the YAML parameters without rewriting the supporting functions.
+
+# Run the simulation
+
+```{r run-simulation}
+simulation_results <- run_simulation(
+  conditions = conditions,
+  n_reps = n_reps,
+  k_published = k_published,
+  seed = simulation_seed,
+  verbose = FALSE
+)
+```
+
+The result contains one row per simulated study, including unpublished
+studies. A literature is identified by the combination of `condition_id`
+and `rep`; `study_id` identifies a study within that literature.
+
+# Validate the output before analysis
+
+The validation module sits between simulation and analysis. It checks the
+required columns and data types, finite numerical values, sample sizes,
+identifiers, condition consistency, variance/standard-error consistency,
+publication-rule consistency, and the number of published studies in each
+observed literature.
+
+If a check fails, rendering stops with an informative error rather than
+continuing with invalid input.
+
+```{r validate-output}
+validate_simulation_results(
+  simulation_results,
+  expected_k = k_published
+)
+cat("Simulation output passed the implemented validation checks.\n")
+```
+
+Passing validation does not establish that the simulation algorithm is
+statistically correct or that every possible analysis assumption is met.
+The validator does not recompute effect sizes or significance tests and does
+not detect an entirely absent condition or replication. These limitations
+should be considered alongside the simulation's tests and the analysis
+module's own checks.
+
+# Inspect the validated data
+
+These summaries provide a quick descriptive check. They are not inferential
+results or meta-analytic estimates.
+
+```{r preview-output}
+preview_columns <- c(
+  "condition_id", "rep", "study_id", "g", "var_g", "se_g", "published"
+)
+knitr::kable(
+  head(simulation_results[, preview_columns, drop = FALSE], 10),
+  digits = 4,
+  caption = "First ten study-level records"
+)
+```
+
+```{r descriptive-check}
+simulation_summary <- describe_simulation(simulation_results)
+knitr::kable(
+  simulation_summary,
+  digits = 3,
+  caption = "Descriptive summaries by condition; effect-size means are unweighted"
+)
+```
+
+`mean_studies_run` is the average number of studies conducted per literature;
+`prop_published` is the fraction of all simulated studies that were published.
+`mean_g_all` and `mean_g_published` are unweighted averages across study rows.
+They should not be interpreted as pooled meta-analytic estimates or as
+averages of replication-specific meta-analytic results.
+
+# Statistical analysis and visualisation
+
+**Not yet integrated.** The analysis module is being developed separately.
+The validated `simulation_results` object above is the intended input for
+integration, subject to agreement on the final analysis interface.
+
+The completed version of this section must run at least one motivated,
+appropriate inferential statistical analysis and display an informative plot
+supporting it, as required by the assignment. Supporting implementation will
+remain in `src/r/`, with only high-level calls and interpretation in this
+main document.
+
+When integrating the analysis, publication-based meta-analyses should use
+only the published studies within each `condition_id` × `rep` literature.
+The full data, including unpublished studies, remain available for comparisons
+and other analyses where appropriate. Replications are separate simulated
+literatures; pooling all their study rows as one literature would change the
+intended unit of analysis.
+
+# Interpretation and limitations
+
+No inferential conclusions are reported in this development version.
+Interpretation will be added after the analysis and supporting plot are
+available and checked against the validated simulation output.
+
+Relevant limitations of the simulation include normally distributed scores,
+equal population variances, equal group allocation, and a simplified
+publication mechanism based on statistical significance and effect direction.
+Collecting a fixed number of published studies improves comparability across
+conditions but is a modelling choice, not a reconstruction of the historical
+publication process. These assumptions limit direct generalisation to the
+real Mozart-effect literature.
+
+# Reproducibility and tests
+
+`run_simulation()` sets the seed supplied above. Repeated runs with identical
+settings in the same computational environment are intended to reproduce the
+study-level data. Its metadata also record a creation time, so the complete
+object including time-dependent attributes need not be identical across runs.
+
+The independent test scripts can be run from the repository root. They are
+not executed automatically while knitting this report.
+
+```{r test-instructions, eval=FALSE}
+source("tests/test_simulation.R")
+source("tests/test_validation.R")
+```
+
+The session information below records the R environment used for this render.
+
+```{r session-information, echo=FALSE}
 sessionInfo()
 ```
 
-# Background references
+# References
+
+Borenstein, M., Hedges, L. V., Higgins, J. P. T., & Rothstein, H. R. (2009).
+*Introduction to Meta-Analysis*. Wiley.
+
+Franco, A., Malhotra, N., & Simonovits, G. (2014). Publication bias in the
+social sciences: Unlocking the file drawer. *Science, 345*, 1502–1505.
+
+Pietschnig, J., Voracek, M., & Formann, A. K. (2010). Mozart effect–Shmozart
+effect: A meta-analysis. *Intelligence, 38*, 314–323.
 
 Rauscher, F. H., Shaw, G. L., & Ky, K. N. (1993). Music and spatial task
 performance. *Nature, 365*, 611.
-https://doi.org/10.1038/365611a0
-
-Pietschnig, J., Voracek, M., & Formann, A. K. (2010). Mozart effect–Shmozart
-effect: A meta-analysis. *Intelligence, 38*(3), 314–323.
-https://doi.org/10.1016/j.intell.2010.03.001
