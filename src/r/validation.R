@@ -10,15 +10,21 @@
 #' @param results Non-empty data frame returned by run_simulation().
 #' @param expected_k Optional positive integer: required number of published
 #'   studies in each condition_id x rep. NULL skips this count requirement.
-#' @param tolerance Positive numerical tolerance for se_g^2 versus var_g.
+#' @param tolerance Positive numerical tolerance for numerical consistency checks.
+#' @param alpha Significance threshold used to generate the publication flags.
+#'   Defaults to 0.05, matching run_simulation().
 #' @return TRUE invisibly when valid; otherwise stops with an informative error.
 validate_simulation_results <- function(results, expected_k = NULL,
-                                        tolerance = 1e-8) {
+                                        tolerance = 1e-8, alpha = 0.05) {
   fail <- function(message) stop(message, call. = FALSE)
   
   if (!is.numeric(tolerance) || length(tolerance) != 1L ||
       !is.finite(tolerance) || tolerance <= 0) {
     fail("`tolerance` must be a single positive finite number.")
+  }
+  if (!is.numeric(alpha) || length(alpha) != 1L ||
+      !is.finite(alpha) || alpha < 0 || alpha > 1) {
+    fail("`alpha` must be a single finite number between 0 and 1.")
   }
   if (!is.null(expected_k)) {
     if (!is.numeric(expected_k) || length(expected_k) != 1L ||
@@ -84,6 +90,19 @@ validate_simulation_results <- function(results, expected_k = NULL,
     }
   }
   if (any(results$tau < 0)) fail("Column `tau` must be non-negative.")
+  
+  # Without heterogeneity, every study has the condition's true effect.
+  bad <- which(
+    results$tau == 0 &
+      abs(results$study_true_d - results$true_d) >
+      tolerance * pmax(1, abs(results$true_d))
+  )
+  if (length(bad) > 0L) {
+    fail(sprintf(
+      "`study_true_d` does not match `true_d` when `tau = 0` at row %d.",
+      bad[1L]
+    ))
+  }
   for (column in c("var_g", "se_g")) {
     if (any(results[[column]] <= 0)) {
       fail(sprintf("Column `%s` must be strictly positive.", column))
@@ -97,6 +116,31 @@ validate_simulation_results <- function(results, expected_k = NULL,
   bad <- which(!is.finite(squared_se) | difference > allowance)
   if (length(bad) > 0L) {
     fail(sprintf("`se_g^2` does not match `var_g` at row %d.", bad[1L]))
+  }
+  
+  # Hedges' g and the t statistic must have the same direction.
+  bad <- which(sign(results$t) != sign(results$g))
+  if (length(bad) > 0L) {
+    fail(sprintf(
+      "`t` and `g` do not have the same sign at row %d.",
+      bad[1L]
+    ))
+  }
+  
+  # Match the simulation's two-sided, equal-variance t test.
+  df <- results$n_mozart + results$n_control - 2
+  bad <- which(!is.finite(df))
+  if (length(bad) > 0L) {
+    fail(sprintf("Non-finite t-test degrees of freedom at row %d.", bad[1L]))
+  }
+  
+  expected_p_value <- 2 * pt(-abs(results$t), df = df)
+  bad <- which(abs(results$p_value - expected_p_value) > tolerance)
+  if (length(bad) > 0L) {
+    fail(sprintf(
+      "`p_value` does not match the two-sided t test at row %d.",
+      bad[1L]
+    ))
   }
   
   # A condition ID may repeat across rows, but must map to one set of settings.
@@ -132,6 +176,16 @@ validate_simulation_results <- function(results, expected_k = NULL,
     }
   }
   
+  # Verify the flag before using it to check the publication rules.
+  expected_significant_positive <- results$p_value < alpha & results$g > 0
+  bad <- which(results$significant_positive != expected_significant_positive)
+  if (length(bad) > 0L) {
+    fail(sprintf(
+      "`significant_positive` does not match `p_value < alpha & g > 0` at row %d (alpha = %s).",
+      bad[1L], format(alpha)
+    ))
+  }
+  
   # Do not infer alpha: significant_positive means positive significance in this schema.
   # Every such study must be published under the current simulation contract.
   if (any(results$significant_positive & !results$published)) {
@@ -164,6 +218,18 @@ validate_simulation_results <- function(results, expected_k = NULL,
       fail(sprintf(
         "Expected %s published studies in condition_id=%s, rep=%s; found %s.",
         expected_k, counts$condition_id[i], counts$rep[i], counts$n_published[i]
+      ))
+    }
+  }
+  
+  # The simulation stops at the final required publication.
+  # Use study_id rather than row order, since input rows may be shuffled.
+  for (rows in literature_rows) {
+    last_row <- rows[which.max(results$study_id[rows])]
+    if (!results$published[last_row]) {
+      fail(sprintf(
+        "The last study is unpublished in condition_id=%s, rep=%s.",
+        results$condition_id[last_row], results$rep[last_row]
       ))
     }
   }
