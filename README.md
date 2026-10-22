@@ -12,7 +12,7 @@ All participant scores and study results are simulated. The Mozart-effect litera
 1. Clone this repository using its GitHub **Code** menu, or download and extract
 the ZIP file.
 2. Open the repository-root `main.Rmd` in RStudio.
-3. Install the required packages in the R Console:
+3. Make sure you have these packages in R Console, if no please install the required packages:
 
 ```r
 install.packages(c("knitr", "rmarkdown", "metafor", "ggplot2"))
@@ -102,7 +102,7 @@ Mean bias is the average estimate minus the generating population effect. Mean a
 
 Egger's test examines asymmetry, not publication bias alone. A non-significant result does not establish that publication bias is absent. Trim-and-fill is not guaranteed to recover the true effect. If methods fail, their summaries may use different sets of literatures; consult the valid counts.
 
-The plots report point summaries without Monte Carlo uncertainty intervals. The model also assumes normal scores, equal group variances, equal group sizes, and a simplified publication rule. These limits should guide the interpretation of the simulation.
+The plots report point summaries without Monte Carlo uncertainty intervals. The model also assumes normally distributed scores, equal population variances, approximately balanced group sizes, and a simplified publication rule.
 
 ## References
 
