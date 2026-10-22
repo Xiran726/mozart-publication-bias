@@ -19,35 +19,36 @@ install.packages(c("knitr", "rmarkdown", "metafor", "ggplot2"))
 ```
 
 4. Click **Knit** to run the full workflow and generate `main.html`.
-Alternatively, run this command in R from the repository root:
 
-```r
-rmarkdown::render("main.Rmd")
-```
+## Requirements
 
-R is required; RStudio is recommended. HTML rendering also requires Pandoc, which is normally supplied with RStudio. No external dataset needs to be downloaded.
+- **R** to run the code; **RStudio** is recommended.
+- **knitr** and **rmarkdown** to execute and render the report.
+- **metafor** for meta-analysis, Egger's test, and trim-and-fill.
+- **ggplot2** for plots.
+- **Pandoc** for HTML rendering, normally supplied with RStudio.
 
-The document checks for missing packages and scripts. It does not install packages automatically. Keep `main.Rmd` in the repository root and preserve the folder structure below.
+The report records the R and package versions used for each run through `sessionInfo()`.
 
 ## Repository structure
 
 ```text
 .
 ├── README.md
-├── main.Rmd                     # Main report and workflow
+├── main.Rmd
 ├── src/
 │   └── r/
 │       ├── simulation.R         # Data generation and publication selection
 │       ├── validation.R         # Study-level data checks
 │       └── analysis.R           # Meta-analysis, summaries, and plots
 ├── tests/
-|   ├── test_simulation.R        # Simulation checks
-|   ├── test_validation.R        # Validation checks
-|   └── test_analysis.R          # Analysis checks
-├── figures/
-|   ├── effect_estimate_comparison.png        # meta-analytic estimates across simulation conditions
-|   ├── egger_test_rates.png                  # Egger's test across simulation consitions
-|   └── publication_bias_heatmap.png          # Publication selection and estimation bias
+│   ├── test_simulation.R        # Simulation checks
+│   ├── test_validation.R        # Validation checks
+│   └── test_analysis.R          # Analysis checks
+└── figures/
+    ├── effect_estimate_comparison.png
+    ├── egger_test_rates.png
+    └── publication_bias_heatmap.png
 ```
 
 ## What the main document does
@@ -84,7 +85,7 @@ The YAML header in `main.Rmd` controls the run size:
 
 ```yaml
 params:
-  n_reps: 20
+  n_reps: 500
   k_published: 38
   seed: 2026
 ```
@@ -92,44 +93,6 @@ params:
 - `n_reps`: simulated literatures per condition.
 - `k_published`: target number of published studies per literature.
 - `seed`: random seed for data generation.
-
-The default run requests 240 literatures in total. Twenty repetitions per condition are intended for development, not as evidence of adequate simulation precision. Larger runs take longer. To request 500 repetitions without editing the file:
-
-```r
-rmarkdown::render("main.Rmd", params = list(n_reps = 500))
-```
-
-Condition values can be edited in the `simulation-settings` chunk. The supplied plotting code uses labels for the default design; check that label handling supports any new values before changing the conditions.
-
-## Dependencies
-
-| Dependency | Purpose |
-|---|---|
-| R | Runs the simulation and analysis |
-| `knitr`, `rmarkdown` | Execute and render `main.Rmd` |
-| `metafor` | Random-effects meta-analysis, Egger's test, and trim-and-fill |
-| `ggplot2` | Figures |
-| Pandoc | HTML rendering |
-
-Package dependencies are installed by `install.packages()`. The report records the R and package versions used for each render through `sessionInfo()`.
-
-## Tests and checks
-
-From the repository root, run these commands in R:
-
-```r
-source("tests/test_simulation.R")
-source("tests/test_validation.R")
-source("tests/test_analysis.R")
-```
-
-These tests are separate from rendering. During rendering, validation stops the workflow if study-level checks fail. Analysis warnings and errors are recorded in diagnostic tables; an HTML file can still be produced when some literature-level analyses fail. Check the diagnostics and valid counts before interpreting results.
-
-For a quick integration check, render with two repetitions per condition:
-
-```r
-rmarkdown::render("main.Rmd", params = list(n_reps = 2))
-```
 
 ## Interpreting the results
 
