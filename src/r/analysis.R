@@ -395,3 +395,270 @@ summarise_conditions <- function(estimates) {
   
   summary_table[order(summary_table$condition_id), ]
 }
+
+# 6. Visualisations --------------------------------------------------------
+
+# The plots show how publication selection affects meta-analytic
+# estimates and how well the detection and correction methods perform.
+
+#' Plot estimation bias across simulation conditions
+#'
+#' Creates a heatmap showing the average bias in published-only
+#' meta-analyses across different true effects, publication
+#' probabilities, and levels of heterogeneity.
+#'
+#' @param condition_summary Data frame from summarise_conditions().
+#' @return A ggplot heatmap.
+plot_bias_heatmap <- function(condition_summary) {
+  
+  # Prepare labels for the simulation conditions
+  plot_data <- condition_summary
+  
+  plot_data$selection <- factor(
+    plot_data$prob_publish_nonsig,
+    levels = c(1, 0.33, 0.10),
+    labels = c("None", "Moderate", "Strong")
+  )
+  
+  plot_data$true_effect <- factor(
+    plot_data$true_d,
+    levels = c(0, 0.24),
+    labels = c("0.00", "0.24")
+  )
+  
+  plot_data$heterogeneity <- factor(
+    plot_data$tau,
+    levels = c(0, 0.3),
+    labels = c("tau = 0", "tau = 0.3")
+  )
+  
+  # Create the heatmap
+  ggplot2::ggplot(
+    plot_data,
+    ggplot2::aes(
+      x = selection,
+      y = true_effect,
+      fill = mean_bias_published
+    )
+  ) +
+    ggplot2::geom_tile(color = "white", linewidth = 1) +
+    ggplot2::geom_text(
+      ggplot2::aes(label = sprintf("%+.3f", mean_bias_published)),
+      size = 4
+    ) +
+    ggplot2::facet_wrap(~heterogeneity) +
+    ggplot2::scale_fill_gradient2(
+      low = "#EBDDFF",
+      mid = "white",
+      high = "#5A189A",
+      midpoint = 0,
+      name = "Mean bias"
+    ) +
+    ggplot2::labs(
+      title = "Publication selection and estimation bias",
+      subtitle = "Mean bias across 500 simulated literatures per condition",
+      x = "Publication selection strength",
+      y = "True effect (d)"
+    ) +
+    ggplot2::theme_minimal(base_size = 12) +
+    ggplot2::theme(
+      panel.grid = ggplot2::element_blank(),
+      plot.title = ggplot2::element_text(face = "bold"),
+      strip.text = ggplot2::element_text(face = "bold")
+    )
+}
+
+#' Compare meta-analytic estimates with the true effect
+#'
+#' Shows how published-only, all-studies, and trim-and-fill
+#' estimates change across simulation conditions.
+#' Dashed lines indicate the known true effect.
+#'
+#' @param condition_summary Data frame from summarise_conditions().
+#' @return A ggplot comparing mean effect estimates.
+plot_estimate_comparison <- function(condition_summary) {
+  
+  # Check that the required columns are present
+  required <- c(
+    "true_d", "tau", "prob_publish_nonsig",
+    "mean_est_published", "mean_est_all", "mean_est_trimfill"
+  )
+  
+  if (!is.data.frame(condition_summary) ||
+      !all(required %in% names(condition_summary))) {
+    stop("Missing required columns for the comparison plot.")
+  }
+  
+  # Put the three estimation methods into one data frame
+  plot_data <- rbind(
+    data.frame(
+      condition_summary,
+      method = "Published only",
+      estimate = condition_summary$mean_est_published
+    ),
+    data.frame(
+      condition_summary,
+      method = "All studies",
+      estimate = condition_summary$mean_est_all
+    ),
+    data.frame(
+      condition_summary,
+      method = "Trim-and-fill",
+      estimate = condition_summary$mean_est_trimfill
+    )
+  )
+  
+  # Prepare labels
+  plot_data$selection <- factor(
+    plot_data$prob_publish_nonsig,
+    levels = c(1, 0.33, 0.10),
+    labels = c("None", "Moderate", "Strong")
+  )
+  
+  plot_data$true_effect <- factor(
+    plot_data$true_d,
+    levels = c(0, 0.24),
+    labels = c("True effect = 0", "True effect = 0.24")
+  )
+  
+  plot_data$heterogeneity <- factor(
+    plot_data$tau,
+    levels = c(0, 0.3),
+    labels = c("tau = 0", "tau = 0.3")
+  )
+  
+  # One reference line for each panel
+  reference_lines <- unique(
+    plot_data[, c("true_effect", "heterogeneity", "true_d")]
+  )
+  
+  # Create the comparison plot
+  p <- ggplot2::ggplot(
+    plot_data,
+    ggplot2::aes(
+      x = selection,
+      y = estimate,
+      color = method,
+      group = method
+    )
+  ) +
+    ggplot2::geom_hline(
+      data = reference_lines,
+      ggplot2::aes(yintercept = true_d),
+      inherit.aes = FALSE,
+      linetype = "dashed",
+      color = "grey40"
+    ) +
+    ggplot2::geom_line(linewidth = 1) +
+    ggplot2::geom_point(size = 3) +
+    ggplot2::facet_grid(true_effect ~ heterogeneity) +
+    ggplot2::scale_color_manual(
+      values = c(
+        "Published only" = "#5A189A",
+        "All studies" = "#8A8493",
+        "Trim-and-fill" = "#B57EDC"
+      )
+    ) +
+    ggplot2::labs(
+      title = "Meta-analytic estimates across simulation conditions",
+      subtitle = "Dashed lines show the known true effect",
+      x = "Publication selection strength",
+      y = "Mean effect estimate (Hedges' g)",
+      color = "Analysis method"
+    ) +
+    ggplot2::theme_minimal(base_size = 12) +
+    ggplot2::theme(
+      plot.title = ggplot2::element_text(face = "bold"),
+      strip.text = ggplot2::element_text(face = "bold"),
+      legend.position = "bottom"
+    )
+  
+  return(p)
+}
+
+#' Plot Egger's test significance rates
+#'
+#' Shows the proportion of significant Egger's tests across
+#' publication selection conditions, true effects, and heterogeneity.
+#' # The dashed line shows a 5% reference rate for comparison.
+#'
+#' @param condition_summary Data frame from summarise_conditions().
+#' @return A ggplot showing Egger's test significance rates.
+plot_egger_rates <- function(condition_summary) {
+  
+  # Check that the required columns are present
+  required <- c(
+    "true_d", "tau", "prob_publish_nonsig",
+    "egger_significant_rate"
+  )
+  
+  if (!is.data.frame(condition_summary) ||
+      !all(required %in% names(condition_summary))) {
+    stop("Missing required columns for the Egger's test plot.")
+  }
+  
+  # Prepare labels for the simulation conditions
+  plot_data <- condition_summary
+  
+  plot_data$selection <- factor(
+    plot_data$prob_publish_nonsig,
+    levels = c(1, 0.33, 0.10),
+    labels = c("None", "Moderate", "Strong")
+  )
+  
+  plot_data$true_effect <- factor(
+    plot_data$true_d,
+    levels = c(0, 0.24),
+    labels = c("True effect = 0", "True effect = 0.24")
+  )
+  
+  plot_data$heterogeneity <- factor(
+    plot_data$tau,
+    levels = c(0, 0.3),
+    labels = c("tau = 0", "tau = 0.3")
+  )
+  
+  # Create the plot
+  p <- ggplot2::ggplot(
+    plot_data,
+    ggplot2::aes(
+      x = selection,
+      y = egger_significant_rate
+    )
+  ) +
+    ggplot2::geom_col(
+      fill = "#7B2CBF",
+      width = 0.65
+    ) +
+    ggplot2::geom_hline(
+      yintercept = 0.05,
+      linetype = "dashed",
+      color = "grey40"
+    ) +
+    ggplot2::geom_text(
+      ggplot2::aes(
+        label = sprintf("%.1f%%", egger_significant_rate * 100)
+      ),
+      vjust = -0.5,
+      size = 3.5
+    ) +
+    ggplot2::facet_grid(true_effect ~ heterogeneity) +
+    ggplot2::scale_y_continuous(
+      labels = function(x) paste0(round(x * 100), "%"),
+      expand = ggplot2::expansion(mult = c(0, 0.15))
+    ) +
+    ggplot2::labs(
+      title = "Egger's test across simulation conditions",
+      subtitle = "Dashed line shows the 5% reference rate",
+      x = "Publication selection strength",
+      y = "Proportion of significant tests"
+    ) +
+    ggplot2::theme_minimal(base_size = 12) +
+    ggplot2::theme(
+      plot.title = ggplot2::element_text(face = "bold"),
+      strip.text = ggplot2::element_text(face = "bold"),
+      panel.grid.major.x = ggplot2::element_blank()
+    )
+  
+  return(p)
+}
