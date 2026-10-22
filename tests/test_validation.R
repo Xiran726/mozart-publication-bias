@@ -63,7 +63,7 @@ local({
       se_g = rep(sqrt(0.1), n),
       t = rep(0, n),
       p_value = rep(1, n),
-      significant = rep(FALSE, n),
+      significant_positive = rep(FALSE, n),
       published = rep(TRUE, n)
     )
   }
@@ -177,10 +177,10 @@ local({
                validate_simulation_results(bad),
                "Column `published` must be a logical vector without missing values")
   bad <- valid
-  bad$significant[1] <- NA
+  bad$significant_positive[1] <- NA
   expect_error("missing significance flags are rejected",
                validate_simulation_results(bad),
-               "Column `significant` must be a logical vector without missing values")
+               "Column `significant_positive` must be a logical vector without missing values")
   bad <- valid
   bad$true_d[1] <- 0.5
   expect_error("conflicting settings under the same condition ID are rejected",
@@ -199,13 +199,13 @@ local({
   check("retained file-drawer rows are accepted",
         validate_simulation_results(selected, expected_k = 1))
   bad <- selected
-  bad$significant[2] <- TRUE
+  bad$significant_positive[2] <- TRUE
   bad$g[2] <- 0.8
   bad$t[2] <- 3
   bad$p_value[2] <- 0.01
   expect_error("unpublished positive-significant study is rejected",
                validate_simulation_results(bad),
-               "A study flagged `significant` is unpublished")
+               "A study flagged `significant_positive` is unpublished")
   bad <- valid
   bad$published[1] <- FALSE
   expect_error("unpublished study under the no-bias filter is rejected",
@@ -213,10 +213,10 @@ local({
                "With `prob_publish_nonsig = 1`, all studies must be published")
   only_positive <- selected
   only_positive$prob_publish_nonsig <- rep(0, nrow(only_positive))
-  only_positive$significant <- only_positive$published
-  only_positive$g[only_positive$significant] <- 0.8
-  only_positive$t[only_positive$significant] <- 3
-  only_positive$p_value[only_positive$significant] <- 0.01
+  only_positive$significant_positive <- only_positive$published
+  only_positive$g[only_positive$significant_positive] <- 0.8
+  only_positive$t[only_positive$significant_positive] <- 3
+  only_positive$p_value[only_positive$significant_positive] <- 0.01
   check("only-positive-significant publication policy is accepted",
         validate_simulation_results(only_positive, expected_k = 1))
   bad <- only_positive
@@ -248,4 +248,57 @@ local({
                "`tolerance` must be a single positive finite number")
   
   cat("\nAll", passed, "validation checks passed.\n")
+})
+
+local({
+  source(file.path("src", "r", "validation.R"), local = TRUE)
+  
+  # Minimal fixture for the reported missing-unpublished-studies case.
+  published <- c(rep(FALSE, 106), rep(TRUE, 38))
+  fixture <- data.frame(
+    condition_id = rep(10, 144),
+    true_d = rep(0, 144),
+    tau = rep(0, 144),
+    prob_publish_nonsig = rep(0.10, 144),
+    rep = rep(1, 144),
+    study_id = seq_len(144),
+    study_true_d = rep(0, 144),
+    n_mozart = rep(20, 144),
+    n_control = rep(20, 144),
+    g = rep(0, 144),
+    var_g = rep(0.04, 144),
+    se_g = rep(0.2, 144),
+    t = rep(0, 144),
+    p_value = rep(1, 144),
+    significant_positive = rep(FALSE, 144),
+    published = published
+  )
+  
+  stopifnot(isTRUE(
+    validate_simulation_results(fixture, expected_k = 38)
+  ))
+  
+  # Row order should not affect validation.
+  stopifnot(isTRUE(
+    validate_simulation_results(fixture[144:1, ], expected_k = 38)
+  ))
+  
+  published_only <- fixture[fixture$published, , drop = FALSE]
+  stopifnot(sum(published_only$published) == 38)
+  
+  error <- tryCatch(
+    {
+      validate_simulation_results(published_only, expected_k = 38)
+      NULL
+    },
+    error = function(e) e
+  )
+  stopifnot(
+    inherits(error, "error"),
+    grepl("study_id", conditionMessage(error), fixed = TRUE),
+    grepl("condition_id=10, rep=1", conditionMessage(error), fixed = TRUE)
+  )
+  
+  cat("PASS: Complete and reordered data pass validation.\n")
+  cat("PASS: Removing 106 unpublished studies fails despite retaining 38 publications.\n")
 })

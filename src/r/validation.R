@@ -38,7 +38,7 @@ validate_simulation_results <- function(results, expected_k = NULL,
   required <- c(
     "condition_id", "true_d", "tau", "prob_publish_nonsig", "rep",
     "study_id", "study_true_d", "n_mozart", "n_control", "g",
-    "var_g", "se_g", "t", "p_value", "significant", "published"
+    "var_g", "se_g", "t", "p_value", "significant_positive", "published"
   )
   missing_columns <- setdiff(required, names(results))
   if (length(missing_columns) > 0L) {
@@ -46,7 +46,7 @@ validate_simulation_results <- function(results, expected_k = NULL,
                 paste(missing_columns, collapse = ", "), "."))
   }
   
-  numeric_columns <- setdiff(required, c("significant", "published"))
+  numeric_columns <- setdiff(required, c("significant_positive", "published"))
   for (column in numeric_columns) {
     values <- results[[column]]
     if (!is.numeric(values) || !is.null(dim(values))) {
@@ -58,7 +58,7 @@ validate_simulation_results <- function(results, expected_k = NULL,
                    column, bad[1L]))
     }
   }
-  for (column in c("significant", "published")) {
+  for (column in c("significant_positive", "published")) {
     values <- results[[column]]
     if (!is.logical(values) || !is.null(dim(values)) || anyNA(values)) {
       fail(sprintf("Column `%s` must be a logical vector without missing values.",
@@ -113,16 +113,35 @@ validate_simulation_results <- function(results, expected_k = NULL,
                  duplicated_rows[1L]))
   }
   
-  # Do not infer alpha: significant means positive significance in this schema.
+  # The simulation numbers all retained studies consecutively from 1.
+  # Sort IDs so validation does not depend on the input row order.
+  literature_rows <- split(
+    seq_len(nrow(results)),
+    paste(results$condition_id, results$rep, sep = ":")
+  )
+  for (rows in literature_rows) {
+    study_ids <- sort(results$study_id[rows])
+    if (any(study_ids != seq_along(rows))) {
+      i <- rows[1L]
+      fail(sprintf(
+        paste0("Missing or non-consecutive `study_id` values in condition_id=%s, ",
+               "rep=%s. Expected IDs 1 through %s with no gaps; ",
+               "provide all published and unpublished studies with their original IDs."),
+        results$condition_id[i], results$rep[i], length(rows)
+      ))
+    }
+  }
+  
+  # Do not infer alpha: significant_positive means positive significance in this schema.
   # Every such study must be published under the current simulation contract.
-  if (any(results$significant & !results$published)) {
-    fail("A study flagged `significant` is unpublished, contrary to the simulation filter.")
+  if (any(results$significant_positive & !results$published)) {
+    fail("A study flagged `significant_positive` is unpublished, contrary to the simulation filter.")
   }
   if (any(results$prob_publish_nonsig == 1 & !results$published)) {
     fail("With `prob_publish_nonsig = 1`, all studies must be published.")
   }
   if (any(results$prob_publish_nonsig == 0 &
-          results$published != results$significant)) {
+          results$published != results$significant_positive)) {
     fail("With `prob_publish_nonsig = 0`, publication must match positive significance.")
   }
   
