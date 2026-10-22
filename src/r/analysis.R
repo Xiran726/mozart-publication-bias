@@ -414,22 +414,32 @@ plot_bias_heatmap <- function(condition_summary) {
   # Prepare labels for the simulation conditions
   plot_data <- condition_summary
   
+  # Get the simulation settings from the actual data
+  selection_levels <- sort(
+    unique(plot_data$prob_publish_nonsig),
+    decreasing = TRUE
+  )
+  
+  effect_levels <- sort(unique(plot_data$true_d))
+  tau_levels <- sort(unique(plot_data$tau))
+  
+  # Create labels that also work with new simulation values
   plot_data$selection <- factor(
     plot_data$prob_publish_nonsig,
-    levels = c(1, 0.33, 0.10),
-    labels = c("None", "Moderate", "Strong")
+    levels = selection_levels,
+    labels = sprintf("%.2f", selection_levels)
   )
   
   plot_data$true_effect <- factor(
     plot_data$true_d,
-    levels = c(0, 0.24),
-    labels = c("0.00", "0.24")
+    levels = effect_levels,
+    labels = sprintf("%.2f", effect_levels)
   )
   
   plot_data$heterogeneity <- factor(
     plot_data$tau,
-    levels = c(0, 0.3),
-    labels = c("tau = 0", "tau = 0.3")
+    levels = tau_levels,
+    labels = paste0("tau = ", tau_levels)
   )
   
   # Create the heatmap
@@ -455,9 +465,9 @@ plot_bias_heatmap <- function(condition_summary) {
       name = "Mean bias"
     ) +
     ggplot2::labs(
-      title = "Publication selection and estimation bias",
+      title = "Publication selection and estimation bias\nin published-only meta-analyses",
       subtitle = "Mean bias across 500 simulated literatures per condition",
-      x = "Publication selection strength",
+      x = "Probability of publishing other results",
       y = "True effect (d)"
     ) +
     ggplot2::theme_minimal(base_size = 12) +
@@ -509,22 +519,32 @@ plot_estimate_comparison <- function(condition_summary) {
   )
   
   # Prepare labels
+  # Get the simulation settings from the actual data
+  selection_levels <- sort(
+    unique(plot_data$prob_publish_nonsig),
+    decreasing = TRUE
+  )
+  
+  effect_levels <- sort(unique(plot_data$true_d))
+  tau_levels <- sort(unique(plot_data$tau))
+  
+  # Create labels that work with different simulation values
   plot_data$selection <- factor(
     plot_data$prob_publish_nonsig,
-    levels = c(1, 0.33, 0.10),
-    labels = c("None", "Moderate", "Strong")
+    levels = selection_levels,
+    labels = sprintf("%.2f", selection_levels)
   )
   
   plot_data$true_effect <- factor(
     plot_data$true_d,
-    levels = c(0, 0.24),
-    labels = c("True effect = 0", "True effect = 0.24")
+    levels = effect_levels,
+    labels = paste0("True effect = ", effect_levels)
   )
   
   plot_data$heterogeneity <- factor(
     plot_data$tau,
-    levels = c(0, 0.3),
-    labels = c("tau = 0", "tau = 0.3")
+    levels = tau_levels,
+    labels = paste0("tau = ", tau_levels)
   )
   
   # One reference line for each panel
@@ -562,7 +582,7 @@ plot_estimate_comparison <- function(condition_summary) {
     ggplot2::labs(
       title = "Meta-analytic estimates across simulation conditions",
       subtitle = "Dashed lines show the known true effect",
-      x = "Publication selection strength",
+      x = "Probability of publishing other results",
       y = "Mean effect estimate (Hedges' g)",
       color = "Analysis method"
     ) +
@@ -600,24 +620,33 @@ plot_egger_rates <- function(condition_summary) {
   # Prepare labels for the simulation conditions
   plot_data <- condition_summary
   
+  # Get the simulation settings from the actual data
+  selection_levels <- sort(
+    unique(plot_data$prob_publish_nonsig),
+    decreasing = TRUE
+  )
+  
+  effect_levels <- sort(unique(plot_data$true_d))
+  tau_levels <- sort(unique(plot_data$tau))
+  
+  # Create labels that work with different simulation values
   plot_data$selection <- factor(
     plot_data$prob_publish_nonsig,
-    levels = c(1, 0.33, 0.10),
-    labels = c("None", "Moderate", "Strong")
+    levels = selection_levels,
+    labels = sprintf("%.2f", selection_levels)
   )
   
   plot_data$true_effect <- factor(
     plot_data$true_d,
-    levels = c(0, 0.24),
-    labels = c("True effect = 0", "True effect = 0.24")
+    levels = effect_levels,
+    labels = paste0("True effect = ", effect_levels)
   )
   
   plot_data$heterogeneity <- factor(
     plot_data$tau,
-    levels = c(0, 0.3),
-    labels = c("tau = 0", "tau = 0.3")
+    levels = tau_levels,
+    labels = paste0("tau = ", tau_levels)
   )
-  
   # Create the plot
   p <- ggplot2::ggplot(
     plot_data,
@@ -650,7 +679,7 @@ plot_egger_rates <- function(condition_summary) {
     ggplot2::labs(
       title = "Egger's test across simulation conditions",
       subtitle = "Dashed line shows the 5% reference rate",
-      x = "Publication selection strength",
+      x = "Probability of publishing other results",
       y = "Proportion of significant tests"
     ) +
     ggplot2::theme_minimal(base_size = 12) +
@@ -662,3 +691,4 @@ plot_egger_rates <- function(condition_summary) {
   
   return(p)
 }
+
