@@ -1,61 +1,428 @@
 ---
 title: "Publication Bias in Psychological Research"
 subtitle: "A simulation project motivated by the Mozart effect debate"
-output: html_document
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    number_sections: true
+params:
+  n_reps: 500
+  k_published: 38
+  seed: 2026
 ---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  error = FALSE,
+  cache = FALSE,
+  fig.width = 9,
+  fig.height = 6
+)
+
+# main.Rmd belongs in the repository root. Keep supporting code in src/r.
+required_packages <- c("metafor", "ggplot2")
+missing_packages <- required_packages[
+  !vapply(required_packages, requireNamespace, logical(1), quietly = TRUE)
+]
+if (length(missing_packages) > 0L) {
+  stop(
+    "Install required packages before rendering: ",
+    paste(missing_packages, collapse = ", "),
+    call. = FALSE
+  )
+}
+
+required_scripts <- file.path("src", "r", c("simulation.R", "validation.R", "analysis.R"))
+missing_scripts <- required_scripts[!file.exists(required_scripts)]
+if (length(missing_scripts) > 0L) {
+  stop(
+    "Missing supporting scripts: ", paste(missing_scripts, collapse = ", "),
+    ". Open main.Rmd from the repository root and make sure the required modules are present.",
+    call. = FALSE
+  )
+}
+
+source(file.path("src", "r", "simulation.R"), local = TRUE)
+source(file.path("src", "r", "validation.R"), local = TRUE)
+source(file.path("src", "r", "analysis.R"), local = TRUE)
+```
 
 # Project overview
 
-This PIPS group project will investigate how selective publication changes
-meta-analytic effect estimates in simulated psychological experiments.
+This project examines how selective publication influences meta-analytic estimates using simulated Mozart-effect experiments.
+Each experiment compares spatial reasoning scores between a Mozart-listening
+group and a control group. The simulation is inspired by the Mozart-effect
+literature discussed by Rauscher et al. (1993) and Pietschnig et al. (2010),
+but is not a direct replication of the original experimental designs.
 
-The Mozart effect debate motivates the project. However, our simulation will
-not establish whether publication bias caused the historical Mozart effect.
+Unlike a real literature, the simulation has a known population effect.
+This allows the analysis to compare estimated effects with the generating
+values and examine distortion associated with selective publication.
 
-# Research question
+## Research question
 
-How do publication-selection mechanisms influence estimated psychological
-effects, and how reliably can selected statistical methods identify the
-resulting distortions?
+How does selective publication influence meta-analytic estimates of the simulated Mozart effect? How often does Egger's test identify funnel-plot asymmetry, and does trim-and-fill reduce estimation error under the simulated conditions?
 
-# Planned workflow
+## Workflow
 
 1. Generate participant-level data for simulated psychological experiments.
 2. Calculate study-level effect estimates and sampling variances.
 3. Apply a clearly specified publication filter.
-4. Compare meta-analyses of all studies and published studies.
-5. Evaluate estimates and selected bias-detection methods across repeated
-   simulations.
+4. Compare meta-analyses of studies and published studies.
+5. Evaluate estimates and selected bias-detection methods across repeated simulations.
 6. Present informative figures and discuss limitations.
 
-The team will agree on the exact simulation settings, effect-size measure,
-and statistical methods before integrating these modules.
+Supporting functions are defined in `src/r/`. This document calls their high-level interfaces and presents the methods, diagnostics, and results.
 
-# Development status
+## How to run this document
 
-This initial document contains the project overview and an R environment
-record. The simulation, publication filter, statistical analyses, and figures
-are not implemented in this version. It is not yet a complete course
-submission and does not report scientific results.
+Install the dependencies once before rendering:
 
-Supporting functions will be stored in `src/` and called from this document
-as the team completes and reviews them.
+```{r installation-instructions, eval=FALSE}
+install.packages(c("knitr", "rmarkdown", "metafor", "ggplot2"))
+```
 
-# R environment
+Open the repository-root `main.Rmd` in RStudio and click **Knit**, or execute
+the following command from the repository root:
 
-The following code records the R version and packages used to render this
-initial document. It does not run the scientific simulation.
+```{r render-instructions, eval=FALSE}
+rmarkdown::render("main.Rmd")
+```
 
-```{r session-record}
+HTML rendering requires Pandoc, normally supplied with RStudio. No personal absolute paths or existing workspace objects are required. Each render runs a fresh simulation rather than loading a previously saved dataset.
+
+The default run uses `r params$n_reps`  replications per condition. The run size can be changed through the YAML parameters. Runtime increases with simulation size and publication selection strength.
+
+# Data
+
+## Data source and structure
+
+All participant scores and study results used in this project are simulated, not observed outcomes from the original Mozart-effect studies. Study sample sizes are sampled from the pool embedded in `simulation.R`; the literature motivates the simulation rather than supplying observed outcomes for analysis.
+
+Participant-level data contain group membership and spatial reasoning scores. The simulation summarises these into one row per study, including Hedges' g, its sampling variance and standard error, significance information, and a publication indicator.
+
+A literature is identified by the combination of `condition_id` and `rep`; `study_id` identifies a study within that literature. The complete output retains unpublished studies, allowing an all-studies benchmark to be compared with the published subset.
+
+## Simulation
+
+### Experimental model
+
+The simulation generates normally distributed spatial reasoning scores for two independent groups with equal population standard deviations. The default control mean is 100 and the standard deviation is 15. These are modelling choices, not observed participant data.
+
+Each study is summarised using Hedges' g, its sampling variance and standard error, and a two-sided equal-variance t-test. Study sample sizes are sampled from the pool embedded in `simulation.R`. Sample sizes are allocated as evenly as possible between the two groups while preserving the sampled total. For odd totals, the Mozart group receives one additional participant.
+
+### Publication mechanism
+
+A study is always published if its result is significant at the simulation's default threshold of 0.05 **and** favours the Mozart group. All other results, including significant results in the opposite direction, are published with probability `prob_publish_nonsig`.
+
+The values below represent no selection (1), moderate selection (0.33), and strong selection (0.10). The middle value is a simplified scenario motivated by the relative publication rates reported by Franco et al. (2014), not a fitted model of publication decisions in the Mozart literature.
+
+For each condition and replication, simulation continues until the requested number of studies has been published. Unpublished studies are retained and marked as file-drawer studies.
+
+### Conditions and run size
+
+We cross two mean population effects, two levels of between-study
+heterogeneity, and three publication probabilities. These give 12 conditions. The effect values are illustrative scenarios defined by this project; they are not estimates obtained from this simulation.
+
+The population parameter `true_d` is Cohen's d, whereas the study-level estimator is the small-sample-corrected Hedges' g. `tau` denotes the between-study standard deviation of generating effects, not a variance.
+
+```{r simulation-settings}
+conditions <- make_conditions(
+  true_d = c(0, 0.24),
+  prob_publish_nonsig = c(1, 0.33, 0.10),
+  tau = c(0, 0.3)
+)
+
+n_reps <- params$n_reps
+k_published <- params$k_published
+simulation_seed <- params$seed
+
+knitr::kable(conditions, caption = "Simulation conditions")
+
+run_settings <- data.frame(
+  setting = c("Conditions", "Replications per condition",
+              "Published studies per literature", "Random seed"),
+  value = c(nrow(conditions), n_reps, k_published, simulation_seed)
+)
+knitr::kable(run_settings, caption = "Run settings")
+```
+
+The run uses `r n_reps` replications per condition. The number of replications alone does not establish adequate Monte Carlo precision.
+
+### Run the simulation
+
+```{r run-simulation}
+simulation_results <- run_simulation(
+  conditions = conditions,
+  n_reps = n_reps,
+  k_published = k_published,
+  seed = simulation_seed,
+  verbose = FALSE
+)
+```
+
+The result contains one row per simulated study, including unpublished studies.
+
+## Validation
+
+The validation module sits between simulation and analysis. It checks the required columns and data types, finite numerical values, sample sizes, identifiers, condition consistency, variance/standard-error consistency, publication-rule consistency, and the number of published studies in each observed literature.
+
+If a check fails, rendering stops with an informative error rather than continuing with invalid input.
+
+```{r validate-output}
+validate_simulation_results(
+  simulation_results,
+  expected_k = k_published
+)
+cat("Simulation output passed the implemented validation checks.\n")
+```
+
+Passing validation does not establish that the simulation algorithm is statistically correct or that every possible analysis assumption is met.
+The validator does not recompute effect sizes from participant-level data, but it checks that p-values match the recorded t statistics and group-size-derived degrees of freedom, and that significance flags match the specified threshold and effect direction. It does not detect an entirely absent condition or replication.
+
+### Inspect the validated data
+
+These summaries provide a quick descriptive check. They are not inferential results or meta-analytic estimates.
+
+```{r preview-output}
+preview_columns <- c(
+  "condition_id", "rep", "study_id", "g", "var_g", "se_g", "published"
+)
+knitr::kable(
+  head(simulation_results[, preview_columns, drop = FALSE], 10),
+  digits = 4,
+  caption = "First ten study-level records"
+)
+```
+
+```{r descriptive-check}
+simulation_summary <- describe_simulation(simulation_results)
+knitr::kable(
+  simulation_summary,
+  digits = 3,
+  caption = "Descriptive summaries by condition; effect-size means are unweighted"
+)
+```
+
+`mean_studies_run` is the average number of studies conducted per literature;
+`prop_published` is the fraction of all simulated studies that were published.
+`mean_g_all` and `mean_g_published` are unweighted averages across study rows.
+They should not be interpreted as pooled meta-analytic estimates or as averages of replication-specific meta-analytic results.
+
+# Analysis
+
+## Random-effects meta-analysis
+
+For every simulated literature, `analysis.R` fits two separate random-effects meta-analyses using `metafor::rma()`: one to the published studies and one to all retained studies. Each model uses Hedges' g and its estimated sampling variance(Borenstein et al., 2009). Between-study variance is estimated using restricted maximum likelihood (REML); the same model is used across conditions, including those
+with zero generating heterogeneity.
+
+Repetitions are analysed as separate literatures, not pooled into one large meta-analysis. This preserves the intended unit of analysis.
+
+## Egger's test and trim-and-fill
+
+Egger's test(Egger et al., 1997) is applied to each published-study model using
+`metafor::regtest(model, model = "rma", predictor = "sei")`. The test examines an association between study effect estimates and standard errors. A p-value below 0.05 is recorded as a significant asymmetry test.
+
+Funnel-plot asymmetry can reflect small-study effects and does not uniquely establish publication bias. In this simulation we know the imposed selection mechanism, but a significant Egger result is still an asymmetry finding rather than proof of the mechanism. Standardised mean differences and their estimated standard errors can also be related by construction.
+
+Trim-and-fill(Duval & Tweedie, 2000) is applied to the published-study model to estimate potentially missing studies under its assumptions and produce an adjusted effect. It is not guaranteed to recover the true effect or the actual unpublished studies. We assess its performance by comparing errors with the unadjusted estimate.
+
+## Run the analysis and inspect diagnostics
+
+```{r run-analysis}
+analysis_results <- analyse_simulations(simulation_results)
+analysis_estimates <- analysis_results$estimates
+analysis_diagnostics <- analysis_results$diagnostics
+
+knitr::kable(
+  as.data.frame(table(status = analysis_diagnostics$status)),
+  caption = "Analysis diagnostic status across simulated literatures"
+)
+```
+
+An `error` means the literature-level analysis returned no estimate row.
+A `warning` can indicate a failed Egger or trim-and-fill step, or another model warning; inspect the details rather than treating every warning as equivalent. 
+Partial method failures retain available meta-analysis estimates. Complete literature failures are excluded from estimate summaries but retained in the log below.
+
+```{r analysis-diagnostic-details}
+flagged_diagnostics <- analysis_diagnostics[
+  analysis_diagnostics$status != "ok", , drop = FALSE
+]
+if (nrow(flagged_diagnostics) > 0L) {
+  knitr::kable(flagged_diagnostics, caption = "Warnings and errors requiring review")
+} else {
+  cat("No analysis warnings or errors were recorded.\n")
+}
+
+if (is.null(analysis_estimates) || nrow(analysis_estimates) == 0L) {
+  stop("No literature-level estimates were returned. Review the analysis diagnostics.",
+       call. = FALSE)
+}
+```
+
+## Performance measures
+
+Estimation error is an estimate minus the condition's generating average population effect. Mean signed error is labelled **mean bias** in the tables and figures. A positive value indicates overestimation; a negative value indicates underestimation. Mean absolute error measures distance from the generating value without cancelling positive and negative errors.
+
+The Egger significant rate uses only available test results. At publication probability 1 it is a reference-condition asymmetry rejection rate; it should not automatically be assumed to equal 5%. Under imposed selection it is the observed asymmetry rejection rate, not a general measure of diagnostic accuracy.
+
+Trim-and-fill summaries use only available adjusted estimates. Different methods may therefore have different denominators. Complete meta-analysis failures are absent from the estimate summaries, so failure patterns must be considered when interpreting performance.
+
+# Results
+The simulation generated `r nrow(conditions) * n_reps` literatures across
+`r nrow(conditions)` conditions, with `r n_reps` repetitions per condition.
+Every literature contained `r k_published` published studies. We compared
+estimates from published studies, all studies, and trim-and-fill, and recorded
+how often Egger's test was significant.
+
+## Results across repetitions
+
+```{r summarise-analysis}
+condition_summary <- summarise_conditions(analysis_estimates)
+
+completion_table <- merge(
+  conditions,
+  condition_summary[, c("condition_id", "n_literatures",
+                        "n_egger_valid", "n_trimfill_valid"), drop = FALSE],
+  by = "condition_id",
+  all.x = TRUE,
+  sort = TRUE
+)
+completion_table$n_requested <- n_reps
+knitr::kable(
+  completion_table,
+  caption = "Returned literature estimates and valid method results by condition"
+)
+```
+
+A missing count in this table indicates a condition with no returned estimate rows; it is not evidence that its methods succeeded.
+
+```{r effect-estimate-table}
+knitr::kable(
+  condition_summary[, c(
+    "condition_id", "true_d", "tau", "prob_publish_nonsig",
+    "mean_est_all", "mean_est_published", "mean_est_trimfill"
+  ), drop = FALSE],
+  digits = 3,
+  caption = "Mean random-effects estimates across available repetitions"
+)
+```
+
+```{r performance-table}
+knitr::kable(
+  condition_summary[, c(
+    "condition_id", "mean_bias_all", "mean_bias_published",
+    "mean_bias_trimfill", "mean_abs_error_all",
+    "mean_abs_error_published", "mean_abs_error_trimfill",
+    "egger_significant_rate"
+  ), drop = FALSE],
+  digits = 3,
+  caption = "Estimation performance and Egger asymmetry rejection rates"
+)
+```
+
+The figures are generated from this run's `condition_summary`, rather than loaded from previously exported images. The horizontal axes show the probability of publishing results that are not positive and significant. In the current design, 1.00, 0.33, and 0.10 represent no selection, moderate selection, and strong selection, respectively. Panels separate the generating mean effects and levels of heterogeneity.
+
+## Trim-and-fill did not fully remove the bias
+
+Compare the all-studies, published-only, and trim-and-fill estimates with the generating effect shown by the dashed lines. The all-studies estimate is a benchmark, not a guarantee of zero estimation error. Missing adjusted estimates are not evidence of successful correction; consult the diagnostics and valid counts.
+
+```{r estimate-comparison-figure, fig.cap="Mean random-effects estimates across available repetitions. Dashed lines show the generating mean population effect. No Monte Carlo uncertainty intervals are shown."}
+plot_estimate_comparison(condition_summary)
+```
+
+All-studies estimates stayed close to the generating effects. Under strong selection, with a true effect of 0.24 and heterogeneity of 0.3, trim-and-fill reduced the mean estimate from approximately 0.562 to 0.482. This remained above the generating effect; the all-studies estimate was approximately 0.237.
+
+Adjustment did not always help. Under moderate selection, with a true effect of zero and heterogeneity of 0.3, mean bias increased from approximately 0.115 to 0.120. These comparisons concern average signed bias, not whether adjustment improved every literature's estimate.
+
+## Egger's test was often non-significant despite selection
+
+Bars show the fraction of available tests with p < 0.05. The dashed line is a 5% reference, not a guarantee of the rejection rate. A non-significant result does not establish the absence of publication bias.
+
+```{r egger-rates-figure, fig.cap="Egger asymmetry rejection rates among valid test results. The dashed line marks a 5% reference rate; valid denominators are reported in the completion table."}
+plot_egger_rates(condition_summary)
+```
+
+Without selection, Egger's test was significant in approximately 4.6%–7.4% of available tests. Under strong selection, the rates ranged from 13.8% to 42.4%. The condition with a published-only bias of 0.323 had a significant-test rate of only 13.8%, showing that substantial average bias could occur alongside a low asymmetry rejection rate.
+
+## Publication selection inflated estimates
+
+The heatmap displays only the average bias of the published-study meta-analyses, not that of all three methods. Positive values indicate average overestimation of the generating effect.
+
+```{r bias-heatmap-figure, fig.cap="Mean estimation bias for published-only meta-analyses across available repetitions. Values are mean estimates minus the generating effect."}
+# Override the supplied fixed 500-repetition subtitle to match any run size.
+plot_bias_heatmap(condition_summary) +
+  ggplot2::labs(
+    title = "Publication selection and bias in published-only meta-analyses",
+    subtitle = "Mean bias across available simulated literatures"
+  )
+```
+
+Without publication selection, mean published-only bias was close to zero, ranging from approximately −0.008 to +0.002. With moderate selection, it ranged from +0.028 to +0.156; with strong selection, from +0.114 to +0.323.
+
+Under strong selection, with a true mean effect of zero and heterogeneity of 0.3, the mean published-only estimate was approximately 0.323. The published literature therefore suggested a positive effect despite no average effect in the generating population.
+
+# Discussion
+
+## Main findings
+
+Selective publication inflated the published-only estimates, including when the generating mean effect was zero. The bias was larger under stronger selection and higher heterogeneity. This shows that a positive pooled estimate can reflect which studies were published, rather than the average effect across all studies. A random-effects model accounts for heterogeneity, but does not itself account for selective publication.
+
+When true effects vary between studies, the publication filter can favour studies with genuinely more positive effects as well as studies with positive sampling errors. This helps explain why the selected literature can give a different impression from the complete literature.
+
+## Detection and adjustment
+
+Egger's test was often non-significant despite substantial average bias. It tests funnel-plot asymmetry, not the size of estimation error. Our results therefore show why a non-significant test should not be treated as evidence that publication selection has had no effect.
+
+Trim-and-fill sometimes moved the average estimate closer to the generating value, but the adjustment was incomplete and did not help in every condition. Its imputed studies are based on funnel-plot patterns, not the actual unpublished studies. Lower average signed bias also does not necessarily mean lower absolute error. If trim-and-fill failed for some literatures, comparisons should use the same set of valid literatures.
+
+## Limitations and next steps
+
+The simulation assumed independent groups, normally distributed scores, equal population variances, and a simple publication rule. It did not include p-hacking, outcome selection, or multiple dependent results from the same study. Real studies and publication decisions are more varied.
+
+Each literature contained 38 published studies. This makes published counts comparable, but stronger selection requires more studies to be conducted. The design therefore compares equal-sized published literatures, not equal amounts of research effort. Only two mean effects and two heterogeneity levels were examined.
+
+The reported averages and rates also have Monte Carlo uncertainty, which is not shown in the figures. Future work could add uncertainty intervals, compare absolute errors within the same literatures, and test other publication rules. Although motivated by the Mozart-effect debate, this project does not establish that publication bias caused the findings in the historical literature.
+
+## Conclusion
+
+Selective publication can make a literature look more positive than the underlying evidence. In these simulations, neither a non-significant Egger test nor a trim-and-fill adjustment was enough to establish that the pooled estimate was free from publication-related distortion.
+
+# Reproducibility
+
+## Random seed and environment
+
+`run_simulation()` sets the seed supplied above. Repeated runs with identical settings in the same computational environment are intended to reproduce the study-level data. Its metadata also record a creation time, so the complete object including time-dependent attributes need not be identical across runs.
+
+The session information below records the R environment used for this render.
+
+```{r session-information, echo=FALSE}
 sessionInfo()
 ```
 
-# Background references
+## Tests
 
-Rauscher, F. H., Shaw, G. L., & Ky, K. N. (1993). Music and spatial task
-performance. *Nature, 365*, 611.
-https://doi.org/10.1038/365611a0
+The independent test scripts can be run from the repository root. They are
+not executed automatically while knitting this report.
 
-Pietschnig, J., Voracek, M., & Formann, A. K. (2010). Mozart effect–Shmozart
-effect: A meta-analysis. *Intelligence, 38*(3), 314–323.
-https://doi.org/10.1016/j.intell.2010.03.001
+```{r test-instructions, eval=FALSE}
+source("tests/test_simulation.R")
+source("tests/test_validation.R")
+source("tests/test_analysis.R")
+```
+
+# References
+
+Borenstein, M., Hedges, L. V., Higgins, J. P. T., & Rothstein, H. R. (2009). *Introduction to Meta-Analysis*. Wiley.
+
+Duval, S., & Tweedie, R. (2000). Trim and fill: A simple funnel-plot-based method of testing and adjusting for publication bias in meta-analysis. *Biometrics, 56*(2), 455–463.
+
+Egger, M., Davey Smith, G., Schneider, M., & Minder, C. (1997). Bias in meta-analysis detected by a simple, graphical test. *BMJ, 315*, 629–634.
+
+Franco, A., Malhotra, N., & Simonovits, G. (2014). Publication bias in the social sciences: Unlocking the file drawer. *Science, 345*, 1502–1505.
+
+Pietschnig, J., Voracek, M., & Formann, A. K. (2010). Mozart effect–Shmozart effect: A meta-analysis. *Intelligence, 38*, 314–323.
+
+Rauscher, F. H., Shaw, G. L., & Ky, K. N. (1993). Music and spatial task performance. *Nature, 365*, 611.
