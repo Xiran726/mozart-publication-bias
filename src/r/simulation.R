@@ -137,16 +137,20 @@ check_probabilities <- function(x, name) {
 #' Example: with sd = 15, true_d = 0.24 means a true advantage of 3.6 IQ
 #' points; Rauscher et al. (1993) reported 8-9 points (d of about 0.55).
 #'
-#' @param n_per_group Number of participants in each group.
+#' @param n_mozart Number of participants in the Mozart group.
+#' @param n_control Number of participants in the control group (by default
+#'   the same as `n_mozart`). The groups may differ in size, so that studies
+#'   with an odd total sample size (e.g. 67 = 34 + 33) can be simulated.
 #' @param true_d True population effect size (Cohen's d) of listening to
 #'   Mozart vs. control. 0 means "no Mozart effect".
 #' @param control_mean Population mean of the control group (IQ scale).
 #' @param sd Population SD of scores in both groups (IQ scale).
 #' @return A data frame with one row per participant and columns
 #'   `participant`, `condition` ("control" / "mozart") and `score`.
-generate_study_data <- function(n_per_group = 20, true_d = 0,
-                                control_mean = 100, sd = 15) {
-  check_count(n_per_group, "n_per_group", min = 2)
+generate_study_data <- function(n_mozart = 20, n_control = n_mozart,
+                                true_d = 0, control_mean = 100, sd = 15) {
+  check_count(n_mozart, "n_mozart", min = 2)
+  check_count(n_control, "n_control", min = 2)
   check_number(true_d, "true_d")
   check_number(control_mean, "control_mean")
   check_number(sd, "sd", min = 0, strict = TRUE)
@@ -154,11 +158,12 @@ generate_study_data <- function(n_per_group = 20, true_d = 0,
   mozart_mean <- control_mean + true_d * sd
   
   data.frame(
-    participant = seq_len(2 * n_per_group),
-    condition   = factor(rep(c("control", "mozart"), each = n_per_group),
+    participant = seq_len(n_control + n_mozart),
+    condition   = factor(rep(c("control", "mozart"),
+                             times = c(n_control, n_mozart)),
                          levels = c("control", "mozart")),
-    score       = c(rnorm(n_per_group, mean = control_mean, sd = sd),
-                    rnorm(n_per_group, mean = mozart_mean,  sd = sd))
+    score       = c(rnorm(n_control, mean = control_mean, sd = sd),
+                    rnorm(n_mozart,  mean = mozart_mean,  sd = sd))
   )
 }
 
@@ -190,9 +195,19 @@ compute_effect_size <- function(mozart, control) {
   if (n1 < 2 || n2 < 2) {
     stop("Each group needs at least 2 participants.", call. = FALSE)
   }
+  if (any(!is.finite(mozart)) || any(!is.finite(control))) {
+    stop("All scores must be finite numbers (no NA, NaN or Inf).",
+         call. = FALSE)
+  }
   
   df        <- n1 + n2 - 2
   sd_pooled <- sqrt(((n1 - 1) * var(mozart) + (n2 - 1) * var(control)) / df)
+  # If every score is identical, the pooled SD is 0 and d would be a
+  # division by zero, so the effect size is undefined
+  if (sd_pooled <= 0) {
+    stop("The pooled SD is 0 (all scores are identical), ",
+         "so the effect size is undefined.", call. = FALSE)
+  }
   d         <- (mean(mozart) - mean(control)) / sd_pooled
   
   j     <- 1 - 3 / (4 * df - 1)                       # Hedges' correction
@@ -218,6 +233,16 @@ summarise_study <- function(data) {
     stop("`data` must be a data frame with columns `condition` and `score`.",
          call. = FALSE)
   }
+  # Every row must be labelled exactly "mozart" or "control"; otherwise rows
+  # with a typo (e.g. "Mozart") would be silently left out of the analysis
+  labels <- as.character(data$condition)
+  unexpected <- unique(labels[is.na(labels) |
+                                !labels %in% c("mozart", "control")])
+  if (length(unexpected) > 0) {
+    stop(sprintf(paste("`condition` may only contain \"mozart\" and",
+                       "\"control\" (found: %s)."),
+                 paste(unexpected, collapse = ", ")), call. = FALSE)
+  }
   result <- compute_effect_size(
     mozart  = data$score[data$condition == "mozart"],
     control = data$score[data$condition == "control"]
@@ -235,9 +260,9 @@ summarise_study <- function(data) {
 #' @inheritParams generate_study_data
 #' @return A one-row data frame (see summarise_study()) plus a column
 #'   `true_d` recording the effect size used to generate the data.
-simulate_mozart_study <- function(n_per_group = 20, true_d = 0,
-                                  control_mean = 100, sd = 15) {
-  data <- generate_study_data(n_per_group, true_d, control_mean, sd)
+simulate_mozart_study <- function(n_mozart = 20, n_control = n_mozart,
+                                  true_d = 0, control_mean = 100, sd = 15) {
+  data <- generate_study_data(n_mozart, n_control, true_d, control_mean, sd)
   cbind(true_d = true_d, summarise_study(data))
 }
 
@@ -265,7 +290,11 @@ MOZART_TOTAL_N <- c(36, 24, 68, 92, 40, 8, 14, 32, 16, 38, 36, 12, 206, 86,
 #' ran one study.
 #'
 #' Sample size: each study's total N is drawn at random from `total_n_pool`
-#' (by default the real Mozart literature) and split equally over the groups.
+#' (by default the real Mozart literature) and split as evenly as possible
+#' over the two groups. The exact total N is kept: an odd total such as 67
+#' becomes 34 (Mozart) + 33 (control), so every sample size in the real
+#' literature can occur. (Which group gets the extra participant does not
+#' matter for the results; we give it to the Mozart group.)
 #'
 #' Heterogeneity: each study's own true effect is drawn from
 #' Normal(`true_d`, `tau`). With tau = 0 every lab studies exactly the same
@@ -287,8 +316,9 @@ simulate_literature <- function(n_studies = 100, true_d = 0, tau = 0,
   check_number(true_d, "true_d")
   check_number(tau, "tau", min = 0)
   if (!is.numeric(total_n_pool) || length(total_n_pool) < 1 ||
-      any(!is.finite(total_n_pool)) || any(total_n_pool < 4)) {
-    stop("`total_n_pool` must contain sample sizes of at least 4.",
+      any(!is.finite(total_n_pool)) || any(total_n_pool < 4) ||
+      any(total_n_pool != round(total_n_pool))) {
+    stop("`total_n_pool` must contain whole-number sample sizes of at least 4.",
          call. = FALSE)
   }
   
@@ -299,14 +329,15 @@ simulate_literature <- function(n_studies = 100, true_d = 0, tau = 0,
   } else {
     sample(total_n_pool, n_studies, replace = TRUE)
   }
-  n_per_group  <- round(total_n / 2)
+  n_control    <- floor(total_n / 2)    # e.g. 67 -> 33
+  n_mozart     <- total_n - n_control   # e.g. 67 -> 34 (exact total kept)
   study_true_d <- rnorm(n_studies, mean = true_d, sd = tau)
   
   # Run every study: generate participants, then compute its effect size.
   # vapply() returns a matrix with one column per study, so t() turns it
   # into one row per study.
   results <- vapply(seq_len(n_studies), function(i) {
-    data <- generate_study_data(n_per_group[i], study_true_d[i],
+    data <- generate_study_data(n_mozart[i], n_control[i], study_true_d[i],
                                 control_mean, sd)
     compute_effect_size(mozart  = data$score[data$condition == "mozart"],
                         control = data$score[data$condition == "control"])
@@ -326,10 +357,11 @@ simulate_literature <- function(n_studies = 100, true_d = 0, tau = 0,
 
 #' Decide which studies get published
 #'
-#' Models selective publication. A study is "significant" when p < alpha AND
-#' the Mozart group scored higher (the predicted direction). Significant
-#' studies are always published. All other studies (non-significant, or
-#' significant in the "wrong" direction) are published only with
+#' Models selective publication. A study is "significant_positive" when
+#' p < alpha AND the Mozart group scored higher (the direction that supports
+#' the Mozart effect). These studies are always published. All other
+#' studies (non-significant, or significant in the "wrong" direction) are
+#' published only with
 #' probability `prob_publish_nonsig`.
 #'
 #' Choosing `prob_publish_nonsig`:
@@ -343,7 +375,8 @@ simulate_literature <- function(n_studies = 100, true_d = 0, tau = 0,
 #' @param prob_publish_nonsig Probability (0-1) that a study without a
 #'   significant positive result is published.
 #' @param alpha Significance threshold.
-#' @return `literature` with two added columns: `significant` (TRUE/FALSE)
+#' @return `literature` with two added columns: `significant_positive`
+#'   (TRUE/FALSE)
 #'   and `published` (TRUE/FALSE). All studies are kept, so published and
 #'   unpublished studies can be compared.
 apply_publication_bias <- function(literature, prob_publish_nonsig = 0.33,
@@ -356,11 +389,11 @@ apply_publication_bias <- function(literature, prob_publish_nonsig = 0.33,
   check_probability(prob_publish_nonsig, "prob_publish_nonsig")
   check_probability(alpha, "alpha")
   
-  significant <- literature$p_value < alpha & literature$g > 0
+  significant_positive <- literature$p_value < alpha & literature$g > 0
   lucky       <- runif(nrow(literature)) < prob_publish_nonsig
   
-  literature$significant <- significant
-  literature$published   <- significant | lucky
+  literature$significant_positive <- significant_positive
+  literature$published            <- significant_positive | lucky
   literature
 }
 
@@ -400,6 +433,8 @@ get_published_studies <- function(literature) {
 #' For speed, studies are simulated in batches. Studies run after the
 #' `k_published`-th publication are discarded, so the result is the same as
 #' running studies one at a time and stopping at the k-th publication.
+#' A batch is never larger than the number of studies still allowed by
+#' `max_studies`, so `max_studies` is a strict upper limit.
 #'
 #' @param k_published Number of published studies to collect.
 #' @param true_d,tau,total_n_pool,control_mean,sd Passed on to
@@ -408,7 +443,8 @@ get_published_studies <- function(literature) {
 #' @param batch_size Number of studies simulated per batch.
 #' @param max_studies Safety limit on the total number of studies run. Stops
 #'   with an error if `k_published` is not reached by then (e.g. when almost
-#'   no study is ever published).
+#'   no study is ever published). Must be at least `k_published`, since no
+#'   more studies can be published than are run.
 #' @return A data frame with ALL studies that were run (published AND file
 #'   drawer), in the order they were run. Exactly `k_published` rows have
 #'   `published == TRUE`.
@@ -422,6 +458,13 @@ simulate_published_literature <- function(k_published = 38, true_d = 0,
   check_count(k_published, "k_published", min = 1)
   check_count(batch_size, "batch_size", min = 1)
   check_count(max_studies, "max_studies", min = 1)
+  if (k_published > max_studies) {
+    stop(sprintf(paste("`k_published` (%d) cannot be larger than",
+                       "`max_studies` (%d): you cannot publish more studies",
+                       "than are run."),
+                 as.integer(k_published), as.integer(max_studies)),
+         call. = FALSE)
+  }
   
   batches     <- list()
   n_published <- 0
@@ -436,13 +479,15 @@ simulate_published_literature <- function(k_published = 38, true_d = 0,
                    as.integer(n_published), as.integer(k_published),
                    as.integer(n_run)), call. = FALSE)
     }
-    batch <- simulate_literature(batch_size, true_d, tau, total_n_pool,
+    # Never run more studies than `max_studies` still allows
+    this_batch <- min(batch_size, max_studies - n_run)
+    batch <- simulate_literature(this_batch, true_d, tau, total_n_pool,
                                  control_mean, sd)
     batch <- apply_publication_bias(batch, prob_publish_nonsig, alpha)
     
     batches[[length(batches) + 1]] <- batch
     n_published <- n_published + sum(batch$published)
-    n_run       <- n_run + batch_size
+    n_run       <- n_run + this_batch
   }
   
   literature <- do.call(rbind, batches)
@@ -526,7 +571,7 @@ make_conditions <- function(true_d = c(0, 0.24),
 #' Columns of each simulated study that are kept in the final results
 RESULT_COLUMNS <- c("rep", "study_id", "study_true_d", "n_mozart",
                     "n_control", "g", "var_g", "se_g", "t", "p_value",
-                    "significant", "published")
+                    "significant_positive", "published")
 
 
 #' Run the full simulation
@@ -550,7 +595,7 @@ RESULT_COLUMNS <- c("rep", "study_id", "study_true_d", "n_mozart",
 #'   n_mozart, n_control    group sizes
 #'   g, var_g, se_g         Hedges' g, its sampling variance and standard error
 #'   t, p_value             t-test result
-#'   significant            p < .05 and Mozart group higher
+#'   significant_positive   p < .05 AND Mozart group higher
 #'   published              passed the journal filter (FALSE = file drawer)
 #'   The settings used are stored in attr(result, "settings").
 run_simulation <- function(conditions = make_conditions(), n_reps = 500,
@@ -558,6 +603,18 @@ run_simulation <- function(conditions = make_conditions(), n_reps = 500,
   needed <- c("condition_id", "true_d", "tau", "prob_publish_nonsig")
   if (!is.data.frame(conditions) || !all(needed %in% names(conditions))) {
     stop("`conditions` must be a data frame from make_conditions().",
+         call. = FALSE)
+  }
+  if (nrow(conditions) == 0) {
+    stop("`conditions` is empty: it needs at least one condition.",
+         call. = FALSE)
+  }
+  # condition_id identifies a condition in the results; duplicated or
+  # missing IDs would mix up studies from different conditions in the
+  # analysis
+  if (anyNA(conditions$condition_id) ||
+      anyDuplicated(conditions$condition_id) > 0) {
+    stop("`condition_id` must be unique and must not be missing.",
          call. = FALSE)
   }
   check_count(n_reps, "n_reps", min = 1)

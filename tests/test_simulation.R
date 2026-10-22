@@ -23,9 +23,13 @@ gives_error <- function(expr) {
 
 # --- 1. One experiment ------------------------------------------------------
 
-data <- generate_study_data(n_per_group = 25, true_d = 0.5)
+data <- generate_study_data(n_mozart = 25, true_d = 0.5)
 check("generate_study_data() creates 25 participants per group",
       nrow(data) == 50 && all(table(data$condition) == 25))
+uneven <- generate_study_data(n_mozart = 34, n_control = 33)
+check("groups can differ in size (34 Mozart + 33 control = 67)",
+      sum(uneven$condition == "mozart") == 34 &&
+        sum(uneven$condition == "control") == 33)
 
 result <- summarise_study(data)
 reference <- t.test(score ~ condition, data = data, var.equal = TRUE)
@@ -35,13 +39,13 @@ check("t and p match R's own t.test()",
         abs(result$p_value - reference$p.value) < 1e-10)
 
 # Without a real effect, about 5% of studies should be significant
-null_p <- replicate(4000, simulate_mozart_study(n_per_group = 20,
+null_p <- replicate(4000, simulate_mozart_study(n_mozart = 20,
                                                 true_d = 0)$p_value)
 check("false-positive rate is about 5% when there is no effect",
       abs(mean(null_p < 0.05) - 0.05) < 0.015)
 
 # Hedges' g should be unbiased: on average it equals the true effect
-g_values <- replicate(4000, simulate_mozart_study(n_per_group = 10,
+g_values <- replicate(4000, simulate_mozart_study(n_mozart = 10,
                                                   true_d = 0.5)$g)
 check("Hedges' g is on average equal to the true effect (0.5)",
       abs(mean(g_values) - 0.5) < 0.03)
@@ -52,9 +56,14 @@ check("Hedges' g is on average equal to the true effect (0.5)",
 lit <- simulate_literature(n_studies = 200, true_d = 0.3)
 check("simulate_literature() returns one row per study",
       nrow(lit) == 200)
-check("sample sizes come from the real Mozart literature",
-      all((lit$n_mozart + lit$n_control) %in%
-            (2 * round(MOZART_TOTAL_N / 2))))
+lit_n <- simulate_literature(n_studies = 2000)
+total_n <- lit_n$n_mozart + lit_n$n_control
+check("every simulated total N is an exact sample size from the literature",
+      all(total_n %in% MOZART_TOTAL_N))
+check("all real sample sizes occur, including odd ones (67, 145, ...)",
+      setequal(unique(total_n), MOZART_TOTAL_N))
+check("groups never differ by more than one participant",
+      all(abs(lit_n$n_mozart - lit_n$n_control) <= 1))
 check("with tau = 0, every study has the same true effect",
       all(lit$study_true_d == 0.3))
 lit_tau <- simulate_literature(n_studies = 2000, true_d = 0.3, tau = 0.2)
@@ -68,10 +77,10 @@ check("prob_publish_nonsig = 1 publishes every study",
       all(apply_publication_bias(lit, prob_publish_nonsig = 1)$published))
 only_sig <- apply_publication_bias(lit, prob_publish_nonsig = 0)
 check("prob_publish_nonsig = 0 publishes only significant positive studies",
-      identical(only_sig$published, only_sig$significant))
-check("significant means p < .05 AND Mozart group higher",
-      all(only_sig$p_value[only_sig$significant] < 0.05) &&
-        all(only_sig$g[only_sig$significant] > 0))
+      identical(only_sig$published, only_sig$significant_positive))
+check("significant_positive means p < .05 AND Mozart group higher",
+      all(only_sig$p_value[only_sig$significant_positive] < 0.05) &&
+        all(only_sig$g[only_sig$significant_positive] > 0))
 
 
 # --- 4. Fixed number of published studies -------------------------------------
@@ -86,6 +95,26 @@ check("file-drawer studies are kept (more than 38 studies were run)",
       nrow(pub_lit) > 38)
 check("no publication bias: exactly 38 studies are run",
       nrow(simulate_published_literature(38, prob_publish_nonsig = 1)) == 38)
+
+# max_studies is a strict upper limit (boundary cases)
+# With batches of 50 and max_studies = 60, the old code ran 100 studies;
+# now the second batch is cut to 10, so it stops after exactly 60
+limit_error <- tryCatch(
+  simulate_published_literature(k_published = 38, true_d = 0,
+                                prob_publish_nonsig = 0, batch_size = 50,
+                                max_studies = 60),
+  error = function(e) conditionMessage(e))
+check("max_studies is never exceeded, even with large batches",
+      grepl("after 60 studies", limit_error))
+exact_limit <- simulate_published_literature(k_published = 2,
+                                             prob_publish_nonsig = 1,
+                                             batch_size = 50, max_studies = 2)
+check("k_published = max_studies works when every study is published",
+      nrow(exact_limit) == 2 && sum(exact_limit$published) == 2)
+check("k_published larger than max_studies is rejected immediately",
+      gives_error(simulate_published_literature(
+        k_published = 2, prob_publish_nonsig = 1,
+        batch_size = 50, max_studies = 1)))
 
 
 # --- 5./6. Full simulation ------------------------------------------------------
@@ -123,13 +152,34 @@ check("with strong bias, published effects are inflated",
 # --- 8. Informative errors --------------------------------------------------
 
 check("negative sample size gives an error",
-      gives_error(generate_study_data(n_per_group = -5)))
+      gives_error(generate_study_data(n_mozart = -5)))
 check("text instead of a number gives an error",
       gives_error(simulate_literature(n_studies = 10, true_d = "big")))
 check("probability above 1 gives an error",
       gives_error(apply_publication_bias(lit, prob_publish_nonsig = 1.5)))
 check("negative heterogeneity gives an error",
       gives_error(simulate_literature(n_studies = 10, tau = -0.1)))
+check("missing scores give an error",
+      gives_error(compute_effect_size(c(1, 2, NA), c(3, 4, 5))))
+check("identical scores (pooled SD = 0) give an error",
+      gives_error(compute_effect_size(c(5, 5, 5), c(5, 5, 5))))
+bad_labels <- data
+bad_labels$condition <- as.character(bad_labels$condition)
+bad_labels$condition[1] <- "Mozart"
+check("unexpected condition labels (e.g. \"Mozart\") give an error",
+      gives_error(summarise_study(bad_labels)))
+check("an empty conditions table gives an error",
+      gives_error(run_simulation(small_conditions[0, ], n_reps = 1,
+                                 verbose = FALSE)))
+duplicated_ids <- small_conditions
+duplicated_ids$condition_id[2] <- 1
+check("duplicated condition IDs give an error",
+      gives_error(run_simulation(duplicated_ids, n_reps = 1,
+                                 verbose = FALSE)))
+missing_ids <- small_conditions
+missing_ids$condition_id[2] <- NA
+check("missing condition IDs give an error",
+      gives_error(run_simulation(missing_ids, n_reps = 1, verbose = FALSE)))
 check("impossible publication target stops instead of running forever",
       gives_error(simulate_published_literature(
         k_published = 38, true_d = -1, prob_publish_nonsig = 0,
