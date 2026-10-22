@@ -36,15 +36,17 @@ The report records the R and package versions used for each run through `session
 .
 ├── README.md
 ├── main.Rmd
+├── data/
+│   └── simulated_literatures.rds # Saved simulation output
 ├── src/
 │   └── r/
-│       ├── simulation.R         # Data generation and publication selection
-│       ├── validation.R         # Study-level data checks
-│       └── analysis.R           # Meta-analysis, summaries, and plots
+│       ├── simulation.R          # Data generation and publication selection
+│       ├── validation.R          # Study-level data checks
+│       └── analysis.R            # Meta-analysis, summaries, and plots
 ├── tests/
-│   ├── test_simulation.R        # Simulation checks
-│   ├── test_validation.R        # Validation checks
-│   └── test_analysis.R          # Analysis checks
+│   ├── test_simulation.R         # Simulation checks
+│   ├── test_validation.R         # Validation checks
+│   └── test_analysis.R           # Analysis checks
 └── figures/
     ├── effect_estimate_comparison.png
     ├── egger_test_rates.png
